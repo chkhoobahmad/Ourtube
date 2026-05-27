@@ -120,17 +120,17 @@ with open(video_info_file, 'r') as f:
                 if readme_path.exists():
                     readme_content = readme_path.read_text(encoding='utf-8')
                     sub_section = f"""
-
----
-
-## 🔤 Subtitles
-
-| # | File | Link |
-|---|------|------|
-| 1 | `subtitle.zip` | [Download]({sub_raw_link}) |
-
-> Contains all available subtitle languages. Extract to get `.vtt` files.
-"""
+                    
+                    ---
+                    
+                    ## 🔤 Subtitles
+                    
+                    | # | File | Link |
+                    |---|------|------|
+                    | 1 | `subtitle.zip` | [Download]({sub_raw_link}) |
+                    
+                    > Contains all available subtitle languages. Extract to get `.vtt` files.
+                    """
                     if "## Download Link" in readme_content:
                         readme_content = readme_content.replace("## Download Link", f"{sub_section}\n\n## Download Link")
                     elif "## Download Links" in readme_content:
