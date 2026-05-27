@@ -29,9 +29,22 @@ os.makedirs("videos", exist_ok=True)
 # HELPER FUNCTIONS
 # ============================================================
 def sanitize_name(name):
+    """Sanitize folder/file name - limit length to 100 chars"""
+    # Replace spaces and unwanted chars
     name = name.replace(' ', '-').replace('　', '-')
+    # Remove invalid characters for filenames
     name = re.sub(r'[\\/:*?"<>|]', '_', name)
-    return re.sub(r'-+', '-', name)
+    # Replace multiple dashes/underscores with single
+    name = re.sub(r'[-_]+', '-', name)
+    # Remove leading/trailing special chars
+    name = name.strip('-_')
+    # Limit length to 100 characters
+    if len(name) > 100:
+        name = name[:100]
+    # Ensure non-empty
+    if not name:
+        name = "video"
+    return name
 
 def urlencode(s):
     import urllib.parse
@@ -93,24 +106,59 @@ def download_video(method, url, tmp_dir):
 # ============================================================
 print(f"Getting channel name from: {CHANNEL_URL}")
 
-result = subprocess.run(["yt-dlp", "--proxy", "socks5://127.0.0.1:1080", "--quiet", "--print", "%(channel)s", CHANNEL_URL], capture_output=True, text=True)
-channel_name = result.stdout.strip()
+# Try multiple methods to get channel name
+channel_name = ""
 
-if not channel_name:
-    result = subprocess.run(["yt-dlp", "--quiet", "--print", "%(channel)s", CHANNEL_URL], capture_output=True, text=True)
-    channel_name = result.stdout.strip()
+# Method 1: With proxy
+try:
+    result = subprocess.run(["yt-dlp", "--proxy", "socks5://127.0.0.1:1080", "--quiet", "--print", "%(channel)s", CHANNEL_URL], capture_output=True, text=True, timeout=30)
+    if result.stdout.strip():
+        channel_name = result.stdout.strip()
+        print(f"Got channel name via proxy: {channel_name}")
+except:
+    pass
 
+# Method 2: Without proxy
 if not channel_name:
-    match = re.search(r'@([^/]+)', CHANNEL_URL)
+    try:
+        result = subprocess.run(["yt-dlp", "--quiet", "--print", "%(channel)s", CHANNEL_URL], capture_output=True, text=True, timeout=30)
+        if result.stdout.strip():
+            channel_name = result.stdout.strip()
+            print(f"Got channel name without proxy: {channel_name}")
+    except:
+        pass
+
+# Method 3: Extract from URL
+if not channel_name:
+    # Try to get channel ID
+    try:
+        result = subprocess.run(["yt-dlp", "--quiet", "--print", "%(channel_id)s", CHANNEL_URL], capture_output=True, text=True, timeout=30)
+        if result.stdout.strip():
+            channel_name = result.stdout.strip()
+            print(f"Got channel ID: {channel_name}")
+    except:
+        pass
+
+# Method 4: Parse from URL
+if not channel_name:
+    match = re.search(r'@([^/?]+)', CHANNEL_URL)
     if match:
         channel_name = match.group(1)
+        print(f"Extracted from URL: {channel_name}")
     else:
         channel_name = "unknown_channel"
 
-channel_name = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF_-]', '_', channel_name)
+# Clean channel name - limit to 50 chars and remove special chars
+channel_name = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF]', '_', channel_name)
 channel_name = re.sub(r'_+', '_', channel_name).strip('_')
+# Limit to 50 characters
+if len(channel_name) > 50:
+    channel_name = channel_name[:50]
+# Ensure non-empty
+if not channel_name:
+    channel_name = "channel"
 
-print(f"Channel name: {channel_name}")
+print(f"Final channel name: {channel_name}")
 
 CHANNEL_DIR = f"videos/{channel_name}"
 BACKUP_CHANNEL_DIR = f"{BACKUP_DIR}/{channel_name}"
@@ -122,18 +170,30 @@ os.makedirs(BACKUP_CHANNEL_DIR, exist_ok=True)
 # ============================================================
 print("Fetching video list from channel...")
 
+video_urls = []
 cmd = ["yt-dlp", "--proxy", "socks5://127.0.0.1:1080", "--flat-playlist", "--print", "%(url)s", CHANNEL_URL]
 if MAX_VIDEOS:
     cmd.extend(["--max-downloads", str(MAX_VIDEOS)])
 
-result = subprocess.run(cmd, capture_output=True, text=True)
-if result.returncode != 0 or not result.stdout.strip():
+try:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode == 0 and result.stdout.strip():
+        video_urls = [u.strip() for u in result.stdout.strip().split('\n') if u.strip()]
+except:
+    pass
+
+# Try without proxy
+if not video_urls:
     cmd = ["yt-dlp", "--flat-playlist", "--print", "%(url)s", CHANNEL_URL]
     if MAX_VIDEOS:
         cmd.extend(["--max-downloads", str(MAX_VIDEOS)])
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.stdout.strip():
+            video_urls = [u.strip() for u in result.stdout.strip().split('\n') if u.strip()]
+    except:
+        pass
 
-video_urls = [u.strip() for u in result.stdout.strip().split('\n') if u.strip()]
 total_videos = len(video_urls)
 print(f"Total videos found: {total_videos}")
 
@@ -201,7 +261,11 @@ for idx, video_url in enumerate(video_urls, 1):
             final_folder_name = filename_no_ext
             counter = 1
             while (Path(CHANNEL_DIR) / final_folder_name).exists() or (Path(BACKUP_CHANNEL_DIR) / final_folder_name).exists():
-                final_folder_name = f"{filename_no_ext}_{get_random_word()}"
+                suffix = get_random_word()
+                final_folder_name = f"{filename_no_ext}_{suffix}"
+                # Limit length
+                if len(final_folder_name) > 100:
+                    final_folder_name = final_folder_name[:100]
                 counter += 1
             
             video_backup_dir = Path(BACKUP_CHANNEL_DIR) / final_folder_name
