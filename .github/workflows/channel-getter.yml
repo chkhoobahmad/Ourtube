@@ -4,41 +4,38 @@ on:
   workflow_dispatch:
     inputs:
       channel_url:
-        description: '🔗 لینک کانال یوتیوب (مثال: https://www.youtube.com/@ChannelName)'
+        description: '🔗 لینک کانال یوتیوب'
         required: true
         type: string
       max_videos:
-        description: '📊 حداکثر تعداد ویدیو برای دانلود (0 = همه)'
+        description: '📊 حداکثر تعداد ویدیو (0=همه)'
         required: false
         default: '0'
         type: string
       download_subtitles:
-        description: '📝 زیرنویس ( فارسی و انگلیسی )'
+        description: '📝 زیرنویس'
         required: false
         default: false
         type: boolean
       quality:
-        description: '🎬 کیفیت و نوع'
+        description: '🎬 کیفیت'
         required: false
         default: 'best'
         type: choice
         options:
           - best
-          - 2160
-          - 1440
           - 1080
           - 720
           - 480
           - audio
       password:
-        description: '🔒 رمز ( اختیاری برای محافظت )'
+        description: '🔒 رمز'
         required: false
         default: ''
         type: string
 
 jobs:
   download-channel:
-    name: "📥 دانلود کل کانال"
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
@@ -48,7 +45,7 @@ jobs:
       - name: Check Channel URL
         run: |
           if [ -z "${{ github.event.inputs.channel_url }}" ]; then
-            echo "❌ No channel URL provided!"
+            echo "No channel URL provided!"
             exit 1
           fi
 
@@ -60,34 +57,19 @@ jobs:
 
       - name: Configure Git
         run: |
-          git config --global http.postBuffer 524288000
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
 
       - name: Start WARP
         run: |
-          echo "Starting Cloudflare WARP container..."
           docker network create warp-net || true
-          docker run -d \
-            --name warp \
-            --restart=always \
-            --network warp-net \
-            -p 1080:1080 \
-            --cap-add NET_ADMIN \
-            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-            --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-            -v warp-data:/var/lib/cloudflare-warp \
-            caomingjun/warp
+          docker run -d --name warp --restart=always --network warp-net -p 1080:1080 --cap-add NET_ADMIN caomingjun/warp
           sleep 15
 
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-pip ffmpeg zip p7zip-full curl jq bc unzip
-          curl -fsSL https://deno.land/install.sh | sh
-          export DENO_INSTALL="$HOME/.deno"
-          export PATH="$DENO_INSTALL/bin:$PATH"
-          echo "$DENO_INSTALL/bin" >> $GITHUB_PATH
           pip3 install --upgrade yt-dlp
 
       - name: Download Channel Videos
@@ -101,11 +83,11 @@ jobs:
           REPO_NAME: ${{ github.event.repository.name }}
           BRANCH: ${{ github.ref_name }}
         run: |
-          python3 -c "
-import subprocess, os, re, sys, time, shutil, random
+          cat > /tmp/download.py << 'SCRIPT'
+#!/usr/bin/env python3
+import subprocess, os, re, sys, time, shutil
 from pathlib import Path
 
-# CONFIG
 CHANNEL_URL = os.environ.get('CHANNEL_URL', '')
 MAX_VIDEOS = int(os.environ.get('MAX_VIDEOS', '0')) if os.environ.get('MAX_VIDEOS', '0') != '0' else None
 QUALITY = os.environ.get('YT_QUALITY', 'best')
@@ -115,286 +97,182 @@ REPO_NAME = os.environ.get('REPO_NAME', '')
 BRANCH = os.environ.get('BRANCH', '')
 
 SPLIT_MB = 95
-SPLIT_BYTES = SPLIT_MB * 1024 * 1024
-BACKUP_DIR = f'/tmp/video_backup_{os.getpid()}'
+BACKUP_DIR = f"/tmp/video_backup_{os.getpid()}"
 os.makedirs(BACKUP_DIR, exist_ok=True)
-os.makedirs('videos', exist_ok=True)
+os.makedirs("videos", exist_ok=True)
 
-def sanitize_name(name, max_len=80):
-    name = name.replace(' ', '-').replace('　', '-')
-    name = re.sub(r'[\\\\/:*?\"<>|]', '_', name)
-    name = re.sub(r'[-_]+', '-', name)
-    name = name.strip('-_')
-    if len(name) > max_len:
-        name = name[:max_len]
-    if not name:
-        name = 'video'
-    return name
-
-def urlencode(s):
-    import urllib.parse
-    return urllib.parse.quote(s, safe='')
+def sanitize(name, max_len=80):
+    name = name.replace(' ', '-')
+    name = re.sub(r'[\\/:*?"<>|]', '_', name)
+    name = re.sub(r'[-_]+', '-', name).strip('-_')
+    return name[:max_len] if len(name) > max_len else name
 
 def get_format():
-    if QUALITY == 'audio':
-        return 'bestaudio/bestaudio*/best'
-    elif QUALITY == 'best':
-        return 'bestvideo+bestaudio/bestvideo*+bestaudio*/best'
-    elif QUALITY in ['2160', '4k']:
-        return 'bestvideo[height<=2160]+bestaudio/bestvideo[height<=2160]*+bestaudio*/bestvideo+bestaudio/best'
-    elif QUALITY in ['1440', '2k']:
-        return 'bestvideo[height<=1440]+bestaudio/bestvideo[height<=1440]*+bestaudio*/bestvideo+bestaudio/best'
-    elif QUALITY == '1080':
-        return 'bestvideo[height<=1080]+bestaudio/bestvideo[height<=1080]*+bestaudio*/bestvideo+bestaudio/best'
-    elif QUALITY == '720':
-        return 'bestvideo[height<=720]+bestaudio/bestvideo[height<=720]*+bestaudio*/bestvideo+bestaudio/best'
-    elif QUALITY == '480':
-        return 'bestvideo[height<=480]+bestaudio/bestvideo[height<=480]*+bestaudio*/bestvideo+bestaudio/best'
-    else:
-        return 'bestvideo+bestaudio/bestvideo*+bestaudio*/best'
+    if QUALITY == "audio": return "bestaudio/best"
+    if QUALITY == "best": return "bestvideo+bestaudio/best"
+    return f"bestvideo[height<={QUALITY}]+bestaudio/best"
 
-def download_video(method, url, tmp_dir):
-    fmt = get_format()
-    
-    if QUALITY == 'audio':
-        common = f'--extract-audio --audio-format mp3 --audio-quality 0 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output {tmp_dir}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline'
-    elif QUALITY == 'best':
-        common = f'--merge-output-format mp4 --format-sort res,+codec:vp9.1,+size --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output {tmp_dir}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline'
-    else:
-        common = f'--merge-output-format mp4 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output {tmp_dir}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline'
-    
-    cmds = {
-        1: f'yt-dlp --proxy socks5://127.0.0.1:1080 --format \"{fmt}\" {common} --extractor-args youtube:player_client=web --js-runtimes deno --remote-components ejs:github --user-agent \"Mozilla/5.0\" \"{url}\"',
-        2: f'yt-dlp --proxy socks5://127.0.0.1:1080 --format \"{fmt}\" {common} --extractor-args youtube:player_client=web --js-runtimes deno --remote-components ejs:npm \"{url}\"',
-        3: f'yt-dlp --proxy socks5://127.0.0.1:1080 --format \"{fmt}\" {common} --extractor-args youtube:player_client=web,mweb,android_vr --js-runtimes deno --remote-components ejs:github \"{url}\"',
-        4: f'yt-dlp --proxy socks5://127.0.0.1:1080 --format \"{fmt}\" {common} --extractor-args youtube:player_client=mweb \"{url}\"',
-        5: f'yt-dlp --proxy socks5://127.0.0.1:1080 --format \"{fmt}\" {common} --extractor-args youtube:player_client=android_vr \"{url}\"',
-        6: f'yt-dlp --format \"{fmt}\" {common} --extractor-args youtube:player_client=web --js-runtimes deno --remote-components ejs:github \"{url}\"',
-        7: f'yt-dlp --format \"{fmt}\" {common} --extractor-args youtube:player_client=mweb \"{url}\"',
-        8: f'yt-dlp --proxy socks5://127.0.0.1:1080 --format \"{fmt}\" {common} --extractor-args youtube:player_client=android \"{url}\"'
-    }
-    
-    print(f'  Trying method {method}...')
-    result = subprocess.run(cmds[method], shell=True, capture_output=True, text=True)
-    return result.returncode == 0
+print(f"Channel: {CHANNEL_URL}")
 
 # Get channel name
-print(f'Getting channel name from: {CHANNEL_URL}')
-channel_name = ''
-for use_proxy in [True, False]:
-    proxy_flag = ['--proxy', 'socks5://127.0.0.1:1080'] if use_proxy else []
+channel_name = ""
+for proxy in [True, False]:
+    proxy_flag = ['--proxy', 'socks5://127.0.0.1:1080'] if proxy else []
     try:
-        result = subprocess.run(['yt-dlp'] + proxy_flag + ['--quiet', '--print', '%(channel)s', CHANNEL_URL], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(['yt-dlp'] + proxy_flag + ['--print', '%(channel)s', CHANNEL_URL], capture_output=True, text=True, timeout=30)
         if result.stdout.strip():
             channel_name = result.stdout.strip()
             break
-    except:
-        pass
+    except: pass
 
 if not channel_name:
     match = re.search(r'@([^/?]+)', CHANNEL_URL)
-    channel_name = match.group(1) if match else 'channel'
+    channel_name = match.group(1) if match else "channel"
 
 channel_name = re.sub(r'[^a-zA-Z0-9]', '_', channel_name)[:40]
-print(f'Channel: {channel_name}')
+print(f"Channel name: {channel_name}")
 
-CHANNEL_DIR = f'videos/{channel_name}'
-BACKUP_CHANNEL_DIR = f'{BACKUP_DIR}/{channel_name}'
+CHANNEL_DIR = f"videos/{channel_name}"
+BACKUP_CHANNEL_DIR = f"{BACKUP_DIR}/{channel_name}"
 os.makedirs(CHANNEL_DIR, exist_ok=True)
 os.makedirs(BACKUP_CHANNEL_DIR, exist_ok=True)
 
 # Get video list
-print('Fetching video list...')
 video_urls = []
-for use_proxy in [True, False]:
-    proxy_flag = ['--proxy', 'socks5://127.0.0.1:1080'] if use_proxy else []
+for proxy in [True, False]:
+    proxy_flag = ['--proxy', 'socks5://127.0.0.1:1080'] if proxy else []
     cmd = ['yt-dlp'] + proxy_flag + ['--flat-playlist', '--print', '%(url)s', CHANNEL_URL]
     if MAX_VIDEOS:
         cmd.extend(['--max-downloads', str(MAX_VIDEOS)])
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.stdout.strip():
-            video_urls = [u.strip() for u in result.stdout.strip().split('\\n') if u.strip()]
+            video_urls = [u.strip() for u in result.stdout.strip().split('\n') if u.strip()]
             if video_urls:
                 break
-    except:
-        pass
+    except: pass
 
-print(f'Found {len(video_urls)} videos')
-
+print(f"Found {len(video_urls)} videos")
 if not video_urls:
-    print('No videos found!')
     sys.exit(1)
 
-video_info_file = '/tmp/video_info.txt'
+video_info_file = "/tmp/video_info.txt"
 open(video_info_file, 'w').close()
 
 # Download each video
 for idx, url in enumerate(video_urls, 1):
-    print(f'\\n{\"=\"*60}')
-    print(f'Video {idx}/{len(video_urls)}: {url}')
-    print(f'{\"=\"*60}')
-    
-    tmp_dir = f'tmp_{idx}'
+    print(f"\n{'='*50} Video {idx}/{len(video_urls)} {'='*50}")
+    tmp_dir = f"/tmp/video_{idx}"
     os.makedirs(tmp_dir, exist_ok=True)
     
+    fmt = get_format()
     success = False
-    for method in range(1, 9):
-        if download_video(method, url, tmp_dir):
-            print(f'  Success with method {method}!')
+    
+    for method in range(1, 5):
+        print(f"  Method {method}...")
+        proxy_flag = ['--proxy', 'socks5://127.0.0.1:1080'] if method % 2 == 1 else []
+        cmd = ['yt-dlp'] + proxy_flag + [
+            '-f', fmt, '-o', f'{tmp_dir}/%(title)s.%(ext)s',
+            '--write-thumbnail', '--convert-thumbnails', 'jpg',
+            '--merge-output-format', 'mp4', '--no-playlist',
+            '--retries', '3', '--no-check-certificates', url
+        ]
+        if QUALITY == "audio":
+            cmd = ['yt-dlp'] + proxy_flag + ['-f', 'bestaudio', '--extract-audio', '--audio-format', 'mp3', '-o', f'{tmp_dir}/%(title)s.%(ext)s', '--no-playlist', url]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
             success = True
+            print(f"  Success!")
             break
         time.sleep(2)
     
     if not success:
-        print(f'  Failed to download video {idx}')
+        print(f"  Failed!")
         shutil.rmtree(tmp_dir, ignore_errors=True)
         continue
     
-    for f in Path(tmp_dir).glob('*.part'):
-        f.unlink()
-    
+    # Process files
     for file in Path(tmp_dir).iterdir():
         if file.is_file() and file.suffix.lower() not in ['.jpg', '.webp']:
-            video_name = sanitize_name(file.stem)
+            video_name = sanitize(file.stem)
             folder_name = video_name
             
-            # Ensure unique folder
+            # Unique folder
             counter = 1
-            while (Path(CHANNEL_DIR) / folder_name).exists() or (Path(BACKUP_CHANNEL_DIR) / folder_name).exists():
-                folder_name = f'{video_name}_{counter}'
+            while (Path(BACKUP_CHANNEL_DIR) / folder_name).exists():
+                folder_name = f"{video_name}_{counter}"
                 counter += 1
             
             video_dir = Path(BACKUP_CHANNEL_DIR) / folder_name
-            video_dir.mkdir(parents=True, exist_ok=True)
+            video_dir.mkdir(parents=True)
             
-            # Copy thumbnail
-            thumb = list(Path(tmp_dir).glob('*.jpg'))
+            # Thumbnail
+            thumb = list(Path(tmp_dir).glob("*.jpg"))
             if thumb:
-                shutil.copy(thumb[0], video_dir / 'thumbnail.jpg')
+                shutil.copy(thumb[0], video_dir / "thumbnail.jpg")
             
             # Save info
             with open(video_info_file, 'a') as f:
-                f.write(f'{url}|{video_name}|{folder_name}\\n')
+                f.write(f"{url}|{video_name}|{folder_name}\n")
             
-            size = file.stat().st_size
-            size_mb = size / 1024 / 1024
+            size_mb = file.stat().st_size / 1024 / 1024
             
-            if size > SPLIT_BYTES:
-                # Split into parts
-                base = video_dir / folder_name
-                if ZIP_PASSWORD:
-                    subprocess.run(['7z', 'a', '-tzip', f'-v{SPLIT_MB}m', f'-p{ZIP_PASSWORD}', '-mx=0', f'{base}.zip', str(file)], capture_output=True)
-                else:
-                    subprocess.run(['zip', '-0', '-s', f'{SPLIT_MB}m', f'{base}.zip', str(file)], capture_output=True)
-                
-                parts = sorted(video_dir.glob('*.zip*'))
-                print(f'  Split into {len(parts)} parts')
-                
-                # Build links
-                links = ''
-                for i, p in enumerate(parts, 1):
-                    encoded = urlencode(p.name)
-                    raw = f'https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/videos/{urlencode(channel_name)}/{urlencode(folder_name)}/{encoded}'
-                    links += f'| {i} | `{p.name}` | [Download]({raw}) |\\n'
-                
-                readme = f'''# {video_name}
-
-<img src=\"thumbnail.jpg\" width=\"250\" />
-
----
-
-## Video Information
-
-| Property | Value |
-|----------|-------|
-| **Video Name** | `{video_name}` |
-| **Channel** | `{channel_name}` |
-| **Original Link** | [YouTube]({url}) |
-| **Total Size** | **{len(parts)} parts** - **{size_mb:.1f} MB** |
-| **Quality** | **{QUALITY}** |
-| **Password** | **{'YES' if ZIP_PASSWORD else 'NO'}** |
-
----
-
-## Download Links
-
-| # | File | Link |
-|---|------|------|
-{links}
-
----
-
-*AVASAM (https://avasam.ir)*
-'''
-                (video_dir / 'README.md').write_text(readme, encoding='utf-8')
-            
+            if ZIP_PASSWORD:
+                zip_path = video_dir / f"{folder_name}.zip"
+                subprocess.run(['zip', '-0', '-P', ZIP_PASSWORD, str(zip_path), str(file)], capture_output=True)
+                file_link = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/videos/{channel_name}/{folder_name}/{folder_name}.zip"
             else:
-                # Single file
-                if ZIP_PASSWORD:
-                    zip_path = video_dir / f'{folder_name}.zip'
-                    subprocess.run(['zip', '-0', '-P', ZIP_PASSWORD, str(zip_path), str(file)], capture_output=True)
-                    file_encoded = urlencode(f'{folder_name}.zip')
-                else:
-                    shutil.copy(file, video_dir / f'{folder_name}.{file.suffix[1:]}')
-                    file_encoded = urlencode(f'{folder_name}.{file.suffix[1:]}')
-                
-                raw_link = f'https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/videos/{urlencode(channel_name)}/{urlencode(folder_name)}/{file_encoded}'
-                
-                readme = f'''# {video_name}
+                ext = file.suffix[1:]
+                shutil.copy(file, video_dir / f"{folder_name}.{ext}")
+                file_link = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/videos/{channel_name}/{folder_name}/{folder_name}.{ext}"
+            
+            # Create README
+            readme = f"""# {video_name}
 
-<img src=\"thumbnail.jpg\" width=\"250\" />
+<img src="thumbnail.jpg" width="250" />
 
 ---
 
-## Video Information
-
-| Property | Value |
-|----------|-------|
-| **Video Name** | `{video_name}` |
-| **Channel** | `{channel_name}` |
-| **Original Link** | [YouTube]({url}) |
-| **Size** | **{size_mb:.1f} MB** |
-| **Quality** | **{QUALITY}** |
-| **Password** | **{'YES' if ZIP_PASSWORD else 'NO'}** |
-
----
+**Channel:** {channel_name}  
+**Original:** [Watch on YouTube]({url})  
+**Size:** {size_mb:.1f} MB  
+**Quality:** {QUALITY}  
+**Password:** {'YES' if ZIP_PASSWORD else 'NO'}
 
 ## Download
 
-[Download]({raw_link})
+[Download File]({file_link})
 
 ---
-
 *AVASAM (https://avasam.ir)*
-'''
-                (video_dir / 'README.md').write_text(readme, encoding='utf-8')
-            
-            print(f'  Saved: {folder_name}')
+"""
+            (video_dir / "README.md").write_text(readme, encoding='utf-8')
+            print(f"  Saved: {folder_name} ({size_mb:.1f} MB)")
     
     shutil.rmtree(tmp_dir, ignore_errors=True)
 
 # Save for next steps
-with open('/tmp/backup_dir_path.txt', 'w') as f:
+with open("/tmp/backup_dir_path.txt", "w") as f:
     f.write(BACKUP_DIR)
-with open('/tmp/env_vars.txt', 'w') as f:
-    f.write(f'REPO_OWNER={REPO_OWNER}\\nREPO_NAME={REPO_NAME}\\nBRANCH={BRANCH}\\nCHANNEL_NAME={channel_name}')
+with open("/tmp/env_vars.txt", "w") as f:
+    f.write(f"REPO_OWNER={REPO_OWNER}\nREPO_NAME={REPO_NAME}\nBRANCH={BRANCH}\nCHANNEL_NAME={channel_name}")
 
-print(f'\\n{\"=\"*60}')
-print(f'DOWNLOAD COMPLETE! Total: {len(video_urls)} videos')
-print(f'{\"=\"*60}')
-"
+print(f"\n{'='*50} COMPLETE! {len(video_urls)} videos {'='*50}")
+SCRIPT
+          python3 /tmp/download.py
 
       - name: Download Subtitles
         if: ${{ github.event.inputs.download_subtitles == 'true' }}
         run: |
-          python3 -c "
-import subprocess, os, re, shutil
+          cat > /tmp/subs.py << 'SUBS'
+#!/usr/bin/env python3
+import subprocess, os, shutil
 from pathlib import Path
 
-with open('/tmp/backup_dir_path.txt', 'r') as f:
+with open("/tmp/backup_dir_path.txt", "r") as f:
     BACKUP_DIR = f.read().strip()
-with open('/tmp/env_vars.txt', 'r') as f:
+with open("/tmp/env_vars.txt", "r") as f:
     for line in f:
         if '=' in line:
             k, v = line.strip().split('=', 1)
@@ -404,33 +282,8 @@ REPO_OWNER = os.environ.get('REPO_OWNER', '')
 REPO_NAME = os.environ.get('REPO_NAME', '')
 BRANCH = os.environ.get('BRANCH', '')
 CHANNEL_NAME = os.environ.get('CHANNEL_NAME', '')
-BACKUP_CHANNEL_DIR = f'{BACKUP_DIR}/{CHANNEL_NAME}'
-video_info_file = '/tmp/video_info.txt'
-
-def get_subs(mode, out, url):
-    flags = {
-        'all': '--write-sub --sub-langs fa,en',
-        'auto-both': '--write-auto-sub --sub-langs en,fa'
-    }
-    sflags = flags.get(mode, '--write-sub --sub-langs fa,en')
-    common = f'--sub-format vtt/srt/best --convert-subs vtt --skip-download --no-playlist --output {out}'
-    
-    cmds = [
-        f'yt-dlp --proxy socks5://127.0.0.1:1080 --extractor-args youtube:player_client=web {sflags} {common} \"{url}\"',
-        f'yt-dlp --extractor-args youtube:player_client=web {sflags} {common} \"{url}\"',
-        f'yt-dlp --proxy socks5://127.0.0.1:1080 --extractor-args youtube:player_client=mweb {sflags} {common} \"{url}\"'
-    ]
-    
-    for cmd in cmds:
-        subprocess.run(cmd, shell=True, capture_output=True)
-        sub_dir = Path(out).parent
-        if mode == 'auto-both':
-            if list(sub_dir.glob('*.en.*')) and list(sub_dir.glob('*.fa.*')):
-                return True
-        else:
-            if list(sub_dir.glob('*.vtt')) or list(sub_dir.glob('*.srt')):
-                return True
-    return False
+BACKUP_CHANNEL_DIR = f"{BACKUP_DIR}/{CHANNEL_NAME}"
+video_info_file = "/tmp/video_info.txt"
 
 with open(video_info_file, 'r') as f:
     for line in f:
@@ -438,61 +291,39 @@ with open(video_info_file, 'r') as f:
         if len(parts) != 3:
             continue
         url, name, folder = parts
-        print(f'\\n{\"=\"*50}')
-        print(f'Subtitles for: {name}')
-        print(f'{\"=\"*50}')
+        print(f"\n{'='*40} {name} {'='*40}")
         
-        sub_dir = Path(BACKUP_CHANNEL_DIR) / folder / 'subtitle'
+        sub_dir = Path(BACKUP_CHANNEL_DIR) / folder / "subtitle"
         sub_dir.mkdir(parents=True, exist_ok=True)
-        out_tmpl = str(sub_dir / '%(title)s')
         
-        get_subs('all', out_tmpl, url)
+        for proxy in [True, False]:
+            proxy_flag = ['--proxy', 'socks5://127.0.0.1:1080'] if proxy else []
+            cmd = ['yt-dlp'] + proxy_flag + ['--write-sub', '--sub-langs', 'fa,en', '--sub-format', 'vtt', '--skip-download', '--no-playlist', '-o', f'{sub_dir}/%(title)s.%(ext)s', url]
+            subprocess.run(cmd, capture_output=True)
         
-        en_files = list(sub_dir.glob('*.en.*'))
-        fa_files = list(sub_dir.glob('*.fa.*'))
-        
-        if not en_files or not fa_files:
-            get_subs('auto-both', out_tmpl, url)
-            en_files = list(sub_dir.glob('*.en.*'))
-            fa_files = list(sub_dir.glob('*.fa.*'))
-        
-        all_subs = list(sub_dir.glob('*'))
-        if not all_subs:
+        sub_files = list(sub_dir.glob('*'))
+        if not sub_files:
             sub_dir.rmdir()
-            print('  No subtitles found')
+            print("  No subtitles")
             continue
         
-        print(f'  Found {len(all_subs)} subtitle files')
-        
-        zip_path = Path(BACKUP_CHANNEL_DIR) / folder / 'subtitle.zip'
+        print(f"  Found {len(sub_files)} files")
+        zip_path = Path(BACKUP_CHANNEL_DIR) / folder / "subtitle.zip"
         subprocess.run(f'cd {sub_dir} && zip -j {zip_path} ./*', shell=True, capture_output=True)
         
         if zip_path.exists():
             shutil.rmtree(sub_dir)
-            print(f'  Created subtitle.zip ({zip_path.stat().st_size / 1024:.0f} KB)')
+            print(f"  Created subtitle.zip ({zip_path.stat().st_size / 1024:.0f} KB)")
             
             # Update README
-            import urllib.parse
-            readme_path = Path(BACKUP_CHANNEL_DIR) / folder / 'README.md'
+            readme_path = Path(BACKUP_CHANNEL_DIR) / folder / "README.md"
             if readme_path.exists():
                 content = readme_path.read_text(encoding='utf-8')
-                sub_link = f'https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/videos/{urllib.parse.quote(CHANNEL_NAME)}/{urllib.parse.quote(folder)}/subtitle.zip'
-                sub_section = f'''
----
-
-## Subtitles
-
-[Download subtitle.zip]({sub_link})
-
-'''
-                if '## Download' in content:
-                    content = content.replace('## Download', f'{sub_section}\\n## Download')
-                else:
-                    content += sub_section
+                sub_link = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/videos/{CHANNEL_NAME}/{folder}/subtitle.zip"
+                content += f"\n\n## Subtitles\n\n[Download subtitle.zip]({sub_link})\n"
                 readme_path.write_text(content, encoding='utf-8')
-
-print('\\nSubtitle download complete!')
-"
+SUBS
+          python3 /tmp/subs.py
 
       - name: Stop WARP
         if: always()
@@ -518,12 +349,14 @@ print('\\nSubtitle download complete!')
           
           git add -f videos/
           
-          # Create master README
-          cat > videos/README.md << 'MASTER'
-# 📺 Downloaded Channels
-
----
-MASTER
+          # Master README
+          {
+            echo "# 📺 Downloaded Channels"
+            echo ""
+            echo "---"
+            echo ""
+          } > videos/README.md
+          
           for channel in videos/*/; do
             if [ -d "$channel" ]; then
               ch_name=$(basename "$channel")
@@ -537,6 +370,10 @@ MASTER
           if ! git diff --cached --quiet; then
             git commit -m "[AVASAM] Download channel: $CHANNEL_NAME [skip ci]"
             git push origin HEAD:${{ github.ref_name }} || true
+            echo "Push completed!"
+          else
+            echo "Nothing to commit"
           fi
           
-          echo "Done! Channel: $CHANNEL_NAME"
+          echo "Channel: $CHANNEL_NAME"
+          echo "Done!"
