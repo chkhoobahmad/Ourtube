@@ -197,7 +197,7 @@ jobs:
           
           # استخراج تمام لینک‌های ویدیوهای کانال (به جای پلی‌لیست)
           echo "Extracting video URLs from channel..."
-          yt-dlp --proxy "socks5://127.0.0.1:1080" --flat-playlist --print "%(webpage_url)s" "$CHANNEL_URL" > /tmp/channel_urls.txt
+          yt-dlp --proxy "socks5://127.0.0.1:1080" --flat-playlist --print "%(webpage_url)s" "$CHANNEL_URL" | grep -v "/shorts/" > /tmp/channel_urls.txt
           
           URL_LIST=()
           while IFS= read -r line; do
