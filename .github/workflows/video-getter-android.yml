@@ -1,4 +1,4 @@
-name: 02 - 🎯 دانلود ویدئو یوتیوب مناسب اندروید
+name: 02 - 🎯 دانلود ویدئو یوتیوب
 
 on:
   workflow_dispatch:
@@ -52,6 +52,12 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+
+      - name: Create necessary directories
+        run: |
+          mkdir -p videos
+          mkdir -p .github/workflows
+          echo "✅ Directories created"
 
       - name: Configure Git for Large Files
         run: |
@@ -135,12 +141,16 @@ jobs:
           SPLIT_MB=95
           SPLIT_BYTES=$(( SPLIT_MB * 1024 * 1024 ))
           BACKUP_DIR="/tmp/video_backup_$$"
+          
+          # ایجاد پوشه‌های مورد نیاز
           mkdir -p "$BACKUP_DIR"
           mkdir -p videos
+          mkdir -p .github/workflows
           > /tmp/video_info.txt
 
           echo "Total URLs to download: $TOTAL_URLS"
           echo "Quality: $QUALITY"
+          echo "Backup directory: $BACKUP_DIR"
 
           # ── FUNCTIONS ────────────────────────────────
           sanitize_name() {
@@ -189,6 +199,9 @@ jobs:
             
             echo "  Encoding to H.264 at ${bitrate}..."
             
+            # ایجاد پوشه برای فایل خروجی
+            mkdir -p "$(dirname "$output_file")"
+            
             # تبدیل با ffmpeg
             ffmpeg -i "$input_file" \
               -c:v libx264 -preset fast -crf 23 \
@@ -222,6 +235,10 @@ jobs:
           download_video() {
             local METHOD=$1; local URL=$2; local TMP_DIR=$3;
             echo "Trying download method $METHOD..."
+            
+            # ایجاد پوشه موقت
+            mkdir -p "$TMP_DIR"
+            
             if [ "$QUALITY" = "audio" ]; then
               COMMON_FLAGS="--extract-audio --audio-format mp3 --audio-quality 0 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
             elif [ "$QUALITY" = "best" ]; then
@@ -244,6 +261,8 @@ jobs:
           get_random_word() { echo "${RANDOM_WORDS[$RANDOM % ${#RANDOM_WORDS[@]}]}_$RANDOM"; }
           get_unique_folder() {
             local BASE_PATH="$1"; local NAME="$2";
+            # اطمینان از وجود پوشه base
+            mkdir -p "$BASE_PATH"
             if [ ! -d "$BASE_PATH/$NAME" ] && [ ! -d "$BACKUP_DIR/$NAME" ]; then echo "$NAME"; return; fi
             local RANDOM_SUFFIX=$(get_random_word)
             while [ -d "$BASE_PATH/${NAME}_${RANDOM_SUFFIX}" ] || [ -d "$BACKUP_DIR/${NAME}_${RANDOM_SUFFIX}" ]; do RANDOM_SUFFIX=$(get_random_word); done
@@ -304,10 +323,14 @@ jobs:
               EXT="${BASENAME##*.}"
               FILENAME_NO_EXT=$(sanitize_name "$FILENAME_NO_EXT")
               FINAL_FOLDER_NAME=$(get_unique_folder "videos" "$FILENAME_NO_EXT")
+              
+              # ایجاد پوشه نهایی
               mkdir -p "$BACKUP_DIR/${FINAL_FOLDER_NAME}"
               
               THUMB_FILE=$(ls "$TMP_DIR"/*.jpg 2>/dev/null | head -1)
-              if [ -n "$THUMB_FILE" ] && [ -f "$THUMB_FILE" ]; then cp "$THUMB_FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg"; fi
+              if [ -n "$THUMB_FILE" ] && [ -f "$THUMB_FILE" ]; then 
+                cp "$THUMB_FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg"
+              fi
               
               echo "${FILENAME_NO_EXT}|${FINAL_FOLDER_NAME}" >> /tmp/video_info.txt
               FOLDER_ENCODED=$(urlencode "${FINAL_FOLDER_NAME}")
@@ -480,7 +503,8 @@ jobs:
                   } > "$README_FILE"
                 fi
               fi
-              rm -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/video.mp4" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/original.*" 2>/dev/null || true
+              # پاکسازی فایل‌های موقت
+              rm -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/video.mp4" 2>/dev/null || true
             done
             rm -rf "$TMP_DIR"
           done
@@ -504,6 +528,7 @@ jobs:
           sub_download() {
             local MODE=$1; local OUT="$2"; local SURL="$3";
             local SUB_DIR=$(dirname "$OUT")
+            mkdir -p "$SUB_DIR"
             sub_count() { find "$SUB_DIR" -type f \( -name "*.vtt" -o -name "*.srt" \) 2>/dev/null | wc -l; }
             fa_count()  { find "$SUB_DIR" -type f \( -name "*.fa.vtt" -o -name "*.fa.srt" \) 2>/dev/null | wc -l; }
             en_count()  { find "$SUB_DIR" -type f \( -name "*.en.vtt" -o -name "*.en.srt" \) 2>/dev/null | wc -l; }
@@ -550,7 +575,8 @@ jobs:
           while IFS='|' read -r ORIGINAL_NAME FOLDER_NAME; do
             URL_INDEX=$((URL_INDEX + 1)); URL="${URL_LIST[$((URL_INDEX - 1))]}";
             [ -z "$FOLDER_NAME" ] && continue
-            SUBTITLE_DIR="$BACKUP_DIR/${FOLDER_NAME}/subtitle"; mkdir -p "$SUBTITLE_DIR";
+            SUBTITLE_DIR="$BACKUP_DIR/${FOLDER_NAME}/subtitle"
+            mkdir -p "$SUBTITLE_DIR"
             OUT_TMPL="${SUBTITLE_DIR}/%(title)s"
             echo "Downloading subtitles for: $FOLDER_NAME"
             sub_download "all" "$OUT_TMPL" "$URL" || true
@@ -603,12 +629,17 @@ jobs:
           REPO_NAME=${REPO_NAME_ENV}
           BACKUP_DIR=$(cat /tmp/backup_dir_path.txt)
 
+          # اطمینان از وجود پوشه videos
+          mkdir -p videos
+
           BACKUP_FILE_COUNT=$(find "$BACKUP_DIR" -type f 2>/dev/null | wc -l)
           if [ "$BACKUP_FILE_COUNT" -eq 0 ]; then
             echo "WARNING: No files in backup directory — all downloads may have failed."
-            git fetch origin "$BRANCH"
-            git reset --hard origin/"$BRANCH"
+            git fetch origin "$BRANCH" || true
+            git reset --hard origin/"$BRANCH" || true
+            
             mkdir -p videos
+            
             if [ ! -f "videos/README.md" ]; then
               {
                 echo "# DOWNLOADED VIDEOS LIST :"
@@ -619,7 +650,7 @@ jobs:
               } > videos/README.md
               git add -f videos/README.md
               if ! git diff --cached --quiet; then
-                git commit -m "[AVASAM] Initialize videos folder [skip ci]"
+                git commit -m "[AVASAM] Initialize videos folder [skip ci]" || true
                 git push origin HEAD:"$BRANCH" || true
               fi
             fi
@@ -646,33 +677,33 @@ jobs:
             done
           }
 
-          git fetch origin "$BRANCH"
-          git reset --hard origin/"$BRANCH"
+          git fetch origin "$BRANCH" || true
+          git reset --hard origin/"$BRANCH" || true
           mkdir -p videos
-          cp -r "$BACKUP_DIR"/* videos/
+          cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
 
-          git add -f videos/
+          git add -f videos/ 2>/dev/null || true
           regenerate_master_readme
-          git add -f videos/README.md
+          git add -f videos/README.md 2>/dev/null || true
 
-          if ! git diff --cached --quiet; then
-            git commit -m "[AVASAM] YouTube download [skip ci]"
+          if ! git diff --cached --quiet 2>/dev/null; then
+            git commit -m "[AVASAM] YouTube download [skip ci]" || true
             PUSH_RETRY=0
             while [ $PUSH_RETRY -lt 10 ]; do
               PUSH_RETRY=$((PUSH_RETRY + 1))
-              if timeout 300 git push origin HEAD:"$BRANCH"; then
+              if timeout 300 git push origin HEAD:"$BRANCH" 2>/dev/null; then
                 echo "Push successful!"
                 break
               else
                 echo "Push failed, retry $PUSH_RETRY/10..."
                 sleep 5
-                git fetch origin "$BRANCH"
-                git reset --hard origin/"$BRANCH"
-                cp -r "$BACKUP_DIR"/* videos/
-                git add -f videos/
+                git fetch origin "$BRANCH" || true
+                git reset --hard origin/"$BRANCH" || true
+                cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
+                git add -f videos/ 2>/dev/null || true
                 regenerate_master_readme
-                git add -f videos/README.md
-                git diff --cached --quiet || git commit -m "[AVASAM] YouTube download [skip ci]"
+                git add -f videos/README.md 2>/dev/null || true
+                git diff --cached --quiet || git commit -m "[AVASAM] YouTube download [skip ci]" || true
               fi
             done
           fi
