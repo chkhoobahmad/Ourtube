@@ -1,4 +1,4 @@
-name: 01 - 🎯 دانلود ویدئو یوتیوب (بهینه برای موبایل)
+name: 02 - 🎯 دانلود ویدئو یوتیوب
 
 on:
   workflow_dispatch:
@@ -15,9 +15,10 @@ on:
       quality:
         description: '🎬 کیفیت و نوع'
         required: false
-        default: '1080'
+        default: 'best'
         type: choice
         options:
+          - best
           - 2160
           - 1440
           - 1080
@@ -32,7 +33,7 @@ on:
 
 jobs:
   get-video:
-    name: "📥 دانلود و بهینه‌سازی ویدیو"
+    name: "📥 دانلود ویدیو"
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -111,7 +112,7 @@ jobs:
           deno --version
           pip3 install --upgrade yt-dlp
 
-      - name: Download & Optimize YouTube Video(s)
+      - name: Download YouTube Video(s)
         env:
           YT_URLS: ${{ github.event.inputs.video_urls }}
           YT_QUALITY: ${{ github.event.inputs.quality }}
@@ -148,65 +149,80 @@ jobs:
             python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
           }
           
-          # تابع بهینه‌سازی ویدئو برای پخش روان در VLC اندروید
-          optimize_for_mobile() {
+          # تابع بهینه‌سازی ساده و مطمئن برای VLC اندروید
+          optimize_for_android() {
             local input_file="$1"
             local output_file="$2"
-            local target_height="$3"
             
-            echo "🎬 Optimizing video for smooth playback on Android VLC..."
+            echo "🎬 Optimizing video for Android VLC (H.264/AAC)..."
             
-            # تنظیم بیت‌ریت بر اساس کیفیت هدف
-            case "$target_height" in
-              "2160"|"4k")  BITRATE="8000k"; MAXRATE="10000k"; BUFSIZE="20000k";;
-              "1440"|"2k")  BITRATE="5000k"; MAXRATE="7000k"; BUFSIZE="14000k";;
-              "1080")       BITRATE="3000k"; MAXRATE="4000k"; BUFSIZE="8000k";;
-              "720")        BITRATE="2000k"; MAXRATE="2500k"; BUFSIZE="5000k";;
-              "480")        BITRATE="1200k"; MAXRATE="1500k"; BUFSIZE="3000k";;
-              *)            BITRATE="2000k"; MAXRATE="2500k"; BUFSIZE="5000k";;
-            esac
-            
-            # تشخیص ویدئو و استخراج اطلاعات
-            local has_video=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 "$input_file" 2>/dev/null | grep -c "video" || echo "0")
-            local has_audio=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_type -of csv=p=0 "$input_file" 2>/dev/null | grep -c "audio" || echo "0")
-            
-            if [ "$has_video" -eq 0 ]; then
-              # فقط فایل صوتی
-              echo "🎵 Audio file detected, converting to AAC..."
-              ffmpeg -i "$input_file" \
-                -c:a aac \
-                -b:a 192k \
-                -ar 48000 \
-                -ac 2 \
-                -movflags +faststart \
-                "$output_file" 2>/dev/null
-              return $?
+            # بررسی فایل ورودی
+            if [ ! -f "$input_file" ]; then
+              echo "❌ Input file not found: $input_file"
+              return 1
             fi
             
-            # بهینه‌سازی ویدئو با کدک H.264 (بهترین پشتیبانی در VLC اندروید)
-            echo "🎬 Converting to H.264 with ${BITRATE} bitrate..."
+            # بدست آوردن اطلاعات ویدئو
+            local video_codec=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null || echo "unknown")
+            local audio_codec=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null || echo "unknown")
+            local height=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null || echo "0")
+            
+            echo "  Original: Video=$video_codec, Audio=$audio_codec, Height=${height}p"
+            
+            # اگر ویدئو در حال حاضر H.264 است و کیفیت مناسب دارد، فقط کپی کن
+            if [ "$video_codec" = "h264" ] || [ "$video_codec" = "avc1" ]; then
+              if [ "$height" -le 1080 ]; then
+                echo "  Video already in H.264 format, copying directly..."
+                cp "$input_file" "$output_file"
+                return 0
+              fi
+            fi
+            
+            # تنظیمات بهینه بر اساس کیفیت
+            local bitrate="2000k"
+            local maxrate="2500k"
+            local bufsize="5000k"
+            
+            if [ "$QUALITY" = "1080" ] || [ "$height" -ge 1000 ]; then
+              bitrate="3000k"
+              maxrate="4000k"
+              bufsize="8000k"
+            elif [ "$QUALITY" = "720" ] || [ "$height" -ge 700 ]; then
+              bitrate="2000k"
+              maxrate="2500k"
+              bufsize="5000k"
+            elif [ "$QUALITY" = "480" ] || [ "$height" -ge 400 ]; then
+              bitrate="1200k"
+              maxrate="1500k"
+              bufsize="3000k"
+            fi
+            
+            echo "  Encoding with H.264 at ${bitrate}..."
+            
+            # تبدیل با ffmpeg و خطاگیری
             ffmpeg -i "$input_file" \
               -c:v libx264 \
-              -preset medium \
+              -preset fast \
               -crf 23 \
-              -maxrate ${MAXRATE} \
-              -bufsize ${BUFSIZE} \
+              -maxrate ${maxrate} \
+              -bufsize ${bufsize} \
               -vf "scale='min(1920,iw)':-2,format=yuv420p" \
               -c:a aac \
-              -b:a 192k \
+              -b:a 128k \
               -ar 48000 \
               -ac 2 \
               -movflags +faststart \
               -pix_fmt yuv420p \
               -profile:v high \
               -level 4.0 \
-              -x264-params "cabac=1:ref=3:deblock=1:0:0:analyse=0x3:0x113:me=hex:subme=7:psy=1:psy_rd=1.00:0.00:mixed_ref=1:me_range=16:chroma_me=1:trellis=1:8x8dct=1:cqm=0:deadzone=21,11:fast_pskip=1:chroma_qp_offset=-2:threads=auto:lookahead_threads=auto:slice-max-size=0:rc-lookahead=40" \
-              "$output_file" 2>/dev/null
+              -y \
+              "$output_file" 2>&1 | grep -E "(error|Error|frame=|size=|speed=)" || true
             
-            local ffmpeg_exit=$?
-            
-            if [ $ffmpeg_exit -eq 0 ] && [ -f "$output_file" ] && [ $(stat -c%s "$output_file") -gt 100000 ]; then
-              echo "✅ Optimization successful!"
+            if [ $? -eq 0 ] && [ -f "$output_file" ] && [ $(stat -c%s "$output_file") -gt 100000 ]; then
+              local new_size=$(stat -c%s "$output_file")
+              local old_size=$(stat -c%s "$input_file")
+              local percent=$((new_size * 100 / old_size))
+              echo "✅ Optimization successful! Size: ${percent}% of original"
               return 0
             else
               echo "⚠️ Optimization failed, using original file"
@@ -215,53 +231,38 @@ jobs:
             fi
           }
 
-          # تنظیم فرمت دانلود بر اساس کیفیت
           case "$QUALITY" in
-            "audio") 
-              FORMAT="bestaudio/bestaudio*/best"
-              ;;
-            "2160"|"4k") 
-              FORMAT="bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best[height<=2160]"
-              ;;
-            "1440"|"2k") 
-              FORMAT="bestvideo[height<=1440][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1440]+bestaudio/best[height<=1440]"
-              ;;
-            "1080") 
-              FORMAT="bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
-              ;;
-            "720") 
-              FORMAT="bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]"
-              ;;
-            "480") 
-              FORMAT="bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]"
-              ;;
-            *) 
-              FORMAT="bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
-              ;;
+            "audio") FORMAT="bestaudio/bestaudio*/best";;
+            "best") FORMAT="bestvideo+bestaudio/bestvideo*+bestaudio*/best";;
+            "2160"|"4k") FORMAT="bestvideo[height<=2160]+bestaudio/bestvideo[height<=2160]*+bestaudio*/bestvideo+bestaudio/best";;
+            "1440"|"2k") FORMAT="bestvideo[height<=1440]+bestaudio/bestvideo[height<=1440]*+bestaudio*/bestvideo+bestaudio/best";;
+            "1080") FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo[height<=1080]*+bestaudio*/bestvideo+bestaudio/best";;
+            "720") FORMAT="bestvideo[height<=720]+bestaudio/bestvideo[height<=720]*+bestaudio*/bestvideo+bestaudio/best";;
+            "480") FORMAT="bestvideo[height<=480]+bestaudio/bestvideo[height<=480]*+bestaudio*/bestvideo+bestaudio/best";;
+            *) FORMAT="bestvideo+bestaudio/bestvideo*+bestaudio*/best";;
           esac
-
+          
           download_video() {
             local METHOD=$1; local URL=$2; local TMP_DIR=$3;
             echo "Trying download method $METHOD..."
-            
-            COMMON_FLAGS="--no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 4 --progress --newline"
-            
             if [ "$QUALITY" = "audio" ]; then
-              COMMON_FLAGS="$COMMON_FLAGS --extract-audio --audio-format aac --audio-quality 0 --write-thumbnail --convert-thumbnails jpg"
+              COMMON_FLAGS="--extract-audio --audio-format mp3 --audio-quality 0 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
+            elif [ "$QUALITY" = "best" ]; then
+              COMMON_FLAGS="--merge-output-format mp4 --format-sort res,+codec:vp9.1,+size --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
             else
-              COMMON_FLAGS="$COMMON_FLAGS --merge-output-format mp4 --write-thumbnail --convert-thumbnails jpg"
+              COMMON_FLAGS="--merge-output-format mp4 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
             fi
-            
             case $METHOD in
-              1) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" "$URL";;
-              2) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:npm --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" "$URL";;
+              1) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL";;
+              2) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:npm --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL";;
               3) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web,mweb,android_vr" --js-runtimes deno --remote-components ejs:github "$URL";;
-              4) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android" --user-agent "Mozilla/5.0 (Linux; Android 12; SM-S906N Build/QP1A.190711.020) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36" "$URL";;
-              5) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github "$URL";;
-              6) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL";;
+              4) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL";;
+              5) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android_vr" "$URL";;
+              6) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github "$URL";;
+              7) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL";;
+              8) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android" --user-agent "Mozilla/5.0 (Linux; Android 12; SM-S906N Build/QP1A.190711.020) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36" "$URL";;
             esac
           }
-          
           RANDOM_WORDS=("alpha" "beta" "gamma" "delta" "epsilon" "zeta" "theta" "kappa" "lambda" "sigma" "omega" "nova" "star" "moon" "sun" "sky" "cloud" "river" "ocean" "mountain")
           get_random_word() { echo "${RANDOM_WORDS[$RANDOM % ${#RANDOM_WORDS[@]}]}_$RANDOM"; }
           get_unique_folder() {
@@ -292,32 +293,35 @@ jobs:
             TMP_DIR="tmp_downloads_${URL_INDEX}"
             mkdir -p "$TMP_DIR"
             DOWNLOAD_SUCCESS=false
-            
-            for METHOD in 1 2 3 4 5 6; do
+            for METHOD in 1 2 3 4 5 6 7 8; do
               if download_video $METHOD "$URL" "$TMP_DIR"; then
                 echo "Download successful with method $METHOD!"
-                DOWNLOAD_SUCCESS=true
-                break
+                QUALITY_OK=true
+                if [ "$QUALITY" != "best" ] && [ "$QUALITY" != "audio" ]; then
+                  for DOWNLOADED_FILE in "$TMP_DIR"/*.mp4 "$TMP_DIR"/*.webm "$TMP_DIR"/*.mkv; do
+                    [ -f "$DOWNLOADED_FILE" ] || continue
+                    ACTUAL_HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$DOWNLOADED_FILE" 2>/dev/null || echo "unknown")
+                    if [ "$ACTUAL_HEIGHT" != "unknown" ] && [ "$ACTUAL_HEIGHT" -lt $(( QUALITY - 150 )) ] 2>/dev/null; then
+                      echo "⚠️  Method $METHOD delivered ${ACTUAL_HEIGHT}p instead of ${QUALITY}p — rejecting..."
+                      QUALITY_OK=false; rm -f "$DOWNLOADED_FILE";
+                    fi
+                  done
+                fi
+                if [ "$QUALITY_OK" = true ]; then DOWNLOAD_SUCCESS=true; break; fi
               else
                 echo "Method $METHOD failed, waiting 3 seconds..."
                 sleep 3
               fi
             done
-            
             if [ "$DOWNLOAD_SUCCESS" = false ]; then
-              echo "❌ All download methods failed for URL: $URL — skipping."
-              rm -rf "$TMP_DIR"
-              continue
+              echo "❌ All download methods failed for URL: $URL — skipping."; rm -rf "$TMP_DIR"; continue;
             fi
-            
             find "$TMP_DIR" -name "*.part" -delete
-            
             for FILE in "$TMP_DIR"/*; do
               [ -f "$FILE" ] || continue
-              if [[ "$FILE" == *.jpg ]] || [[ "$FILE" == *.webp ]]; then
-                continue
-              fi
+              if [[ "$FILE" == *.jpg ]] || [[ "$FILE" == *.webp ]]; then continue; fi
               
+              SIZE=$(stat -c%s "$FILE")
               BASENAME=$(basename "$FILE")
               FILENAME_NO_EXT="${BASENAME%.*}"
               EXT="${BASENAME##*.}"
@@ -325,43 +329,41 @@ jobs:
               FINAL_FOLDER_NAME=$(get_unique_folder "videos" "$FILENAME_NO_EXT")
               mkdir -p "$BACKUP_DIR/${FINAL_FOLDER_NAME}"
               
-              # ذخیره thumbnail
               THUMB_FILE=$(ls "$TMP_DIR"/*.jpg 2>/dev/null | head -1)
-              if [ -n "$THUMB_FILE" ] && [ -f "$THUMB_FILE" ]; then 
-                cp "$THUMB_FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg"
-              fi
+              if [ -n "$THUMB_FILE" ] && [ -f "$THUMB_FILE" ]; then cp "$THUMB_FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg"; fi
               
               echo "${FILENAME_NO_EXT}|${FINAL_FOLDER_NAME}" >> /tmp/video_info.txt
               FOLDER_ENCODED=$(urlencode "${FINAL_FOLDER_NAME}")
               
-              # بهینه‌سازی ویدئو برای موبایل
-              echo "🔄 Starting optimization for: $FILENAME_NO_EXT"
-              OPTIMIZED_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/temp_optimized.mp4"
-              optimize_for_mobile "$FILE" "$OPTIMIZED_FILE" "$QUALITY"
-              
-              # استفاده از فایل بهینه‌شده برای آرشیو
-              FINAL_VIDEO_FILE="$OPTIMIZED_FILE"
-              VIDEO_EXT="mp4"
-              
-              SIZE=$(stat -c%s "$FINAL_VIDEO_FILE")
-              SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
-              
-              # ایجاد آرشیو با فشرده‌سازی مناسب (نه بدون فشرده‌سازی)
-              if [ "$SIZE" -gt "$SPLIT_BYTES" ]; then
-                echo "📦 Creating split archive (${SIZE_MB} MB)..."
-                ARCHIVE_BASE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}"
-                
-                if [ -n "$ZIP_PASSWORD" ]; then
-                  7z a -tzip -v${SPLIT_MB}m -p"${ZIP_PASSWORD}" -mx=3 "${ARCHIVE_BASE}.zip" "$FINAL_VIDEO_FILE"
+              # بهینه‌سازی برای اندروید (فقط برای ویدئوها، نه فایل صوتی)
+              FINAL_FILE="$FILE"
+              if [ "$QUALITY" != "audio" ]; then
+                OPTIMIZED_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/optimized.mp4"
+                if optimize_for_android "$FILE" "$OPTIMIZED_FILE"; then
+                  FINAL_FILE="$OPTIMIZED_FILE"
+                  EXT="mp4"
+                  echo "✅ Video optimized for Android VLC"
                 else
-                  zip -r -s ${SPLIT_MB}m "${ARCHIVE_BASE}.zip" "$FINAL_VIDEO_FILE"
+                  echo "⚠️ Using original file (optimization skipped)"
+                  cp "$FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/original.${EXT}"
+                  FINAL_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/original.${EXT}"
                 fi
-                
-                # حذف فایل موقت
-                rm -f "$FINAL_VIDEO_FILE"
-                
+              else
+                cp "$FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/audio.${EXT}"
+                FINAL_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/audio.${EXT}"
+              fi
+              
+              SIZE=$(stat -c%s "$FINAL_FILE")
+              
+              if [ "$SIZE" -gt "$SPLIT_BYTES" ]; then
+                ARCHIVE_BASE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}"
+                if [ -n "$ZIP_PASSWORD" ]; then
+                  7z a -tzip -v${SPLIT_MB}m -p"${ZIP_PASSWORD}" -mx=0 "${ARCHIVE_BASE}.zip" "$FINAL_FILE"
+                else
+                  zip -0 -s ${SPLIT_MB}m "${ARCHIVE_BASE}.zip" "$FINAL_FILE"
+                fi
                 PART_COUNT=$(ls "$BACKUP_DIR/${FINAL_FOLDER_NAME}/"*.zip "$BACKUP_DIR/${FINAL_FOLDER_NAME}/"*.z[0-9]* 2>/dev/null | wc -l)
-                
+
                 TOTAL_SIZE=0
                 for part_file in "$BACKUP_DIR/${FINAL_FOLDER_NAME}"/*; do
                   if [ -f "$part_file" ]; then
@@ -370,8 +372,7 @@ jobs:
                   fi
                 done
                 TOTAL_SIZE_MB=$(echo "scale=2; $TOTAL_SIZE / 1024 / 1024" | bc)
-                
-                # ساخت لینک‌های دانلود
+
                 DOWNLOAD_LINKS_MD=""
                 LINK_NUM=0
                 for part_file in $(ls "$BACKUP_DIR/${FINAL_FOLDER_NAME}/"*.zip "$BACKUP_DIR/${FINAL_FOLDER_NAME}/"*.z[0-9]* 2>/dev/null | sort -V); do
@@ -383,102 +384,210 @@ jobs:
                     DOWNLOAD_LINKS_MD="${DOWNLOAD_LINKS_MD}| ${LINK_NUM} | \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |"$'\n'
                   fi
                 done
-                
+
                 MAIN_ZIP="${FINAL_FOLDER_NAME}.zip"
-                
+
+                README_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+                {
+                  printf '%s\n' "# ${FILENAME_NO_EXT}"
+                  printf '%s\n' ""
+
+                  if [ -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg" ]; then
+                    THUMB_ENCODED=$(urlencode "thumbnail.jpg")
+                    THUMB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${THUMB_ENCODED}"
+                    printf '%s\n' "<div align=\"center\">"
+                    printf '%s\n' "  <picture>"
+                    printf '%s\n' "    <img src=\"thumbnail.jpg\" width=\"250\" />"
+                    printf '%s\n' "  </picture>"
+                    printf '%s\n' "</div>"
+                    printf '%s\n' ""
+                    printf '%s\n' "<br>"
+                    printf '%s\n' ""
+                  fi
+
+                  printf '%s\n' "---"
+                  printf '%s\n' ""
+                  printf '%s\n' "## Video Information"
+                  printf '%s\n' ""
+                  printf '%s\n' "| Property | Value |"
+                  printf '%s\n' "|----------|-------|"
+                  printf '%s\n' "| **Video Name** | \`${FILENAME_NO_EXT}\` |"
+                  printf '%s\n' "| **Original Link** | [YouTube Video](${URL}) |"
+                  printf '%s\n' "| **Total Size** | **${PART_COUNT} parts** - **${TOTAL_SIZE_MB} MB** |"
+                  printf '%s\n' "| **Quality** | **${QUALITY}** |"
+                  printf '%s\n' "| **Format** | **H.264/AAC** (Optimized for Android VLC) |"
+                  printf '%s\n' "| **Status** | **Complete (100%)** |"
+                  if [ -n "$ZIP_PASSWORD" ]; then
+                    printf '%s\n' "| **Password Protected** | **YES** |"
+                  else
+                    printf '%s\n' "| **Password Protected** | **NO** |"
+                  fi
+                  printf '%s\n' ""
+                  printf '%s\n' "---"
+                  printf '%s\n' ""
+                  printf '%s\n' "## Download Links"
+                  printf '%s\n' ""
+                  printf '%s\n' "> ⬇️ Download **all parts**, then open \`${MAIN_ZIP}\` — the other parts are found automatically."
+                  printf '%s\n' ""
+                  printf '%s\n' "| # | File | Link |"
+                  printf '%s\n' "|---|------|------|"
+                  printf '%s' "${DOWNLOAD_LINKS_MD}"
+                  printf '%s\n' ""
+                  printf '%s\n' "---"
+                  printf '%s\n' ""
+                  printf '%s\n' "## How to Play on Android VLC"
+                  printf '%s\n' ""
+                  printf '%s\n' "This video is **optimized for smooth playback** on VLC Android:"
+                  printf '%s\n' ""
+                  printf '%s\n' "1. Download all parts into the **same folder**"
+                  printf '%s\n' "2. Extract the first part (opens automatically with 7-Zip/ZArchiver)"
+                  if [ -n "$ZIP_PASSWORD" ]; then
+                    printf '%s\n' "3. Enter the password when prompted"
+                  fi
+                  printf '%s\n' "4. Open VLC → Browse → Select the video file"
+                  printf '%s\n' "5. **Enjoy smooth, lag-free playback!**"
+                  printf '%s\n' ""
+                  printf '%s\n' "> 💡 **Tip:** Enable Hardware Acceleration in VLC Settings → Video for best performance"
+                  printf '%s\n' ""
+                  printf '%s\n' "---"
+                  printf '%s\n' ""
+                  printf '%s\n' "*This tool created by [avasam.ir](https://avasam.ir)*"
+                } > "$README_FILE"
+
+                echo "Created README.md"
+
               else
-                echo "📦 Creating single archive (${SIZE_MB} MB)..."
                 if [ -n "$ZIP_PASSWORD" ]; then
-                  zip -r -P "${ZIP_PASSWORD}" -mx=3 \
+                  echo "$BASENAME - creating password-protected zip archive"
+
+                  zip -0 -P "${ZIP_PASSWORD}" \
                     "$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}.zip" \
-                    "$FINAL_VIDEO_FILE"
-                  ARCHIVE_NAME="${FINAL_FOLDER_NAME}.zip"
+                    "$FINAL_FILE"
+
+                  SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
+                  FILE_ENCODED=$(urlencode "${FINAL_FOLDER_NAME}.zip")
+                  RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
+
+                  README_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+                  {
+                    printf '%s\n' "# ${FILENAME_NO_EXT}"
+                    printf '%s\n' ""
+
+                    if [ -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg" ]; then
+                      THUMB_ENCODED=$(urlencode "thumbnail.jpg")
+                      THUMB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${THUMB_ENCODED}"
+                      printf '%s\n' "<div align=\"center\">"
+                      printf '%s\n' "  <picture>"
+                      printf '%s\n' "    <img src=\"${THUMB_RAW_LINK}\" alt=\"Video Thumbnail\" width=\"250\" />"
+                      printf '%s\n' "  </picture>"
+                      printf '%s\n' "</div>"
+                      printf '%s\n' ""
+                      printf '%s\n' "<br>"
+                      printf '%s\n' ""
+                    fi
+
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "## Video Information"
+                    printf '%s\n' ""
+                    printf '%s\n' "| Property | Value |"
+                    printf '%s\n' "|----------|-------|"
+                    printf '%s\n' "| **Video Name** | \`${FILENAME_NO_EXT}\` |"
+                    printf '%s\n' "| **Original Link** | [YouTube Video](${URL}) |"
+                    printf '%s\n' "| **Total Size** | **1 archive** - **${SIZE_MB} MB** |"
+                    printf '%s\n' "| **Quality** | **${QUALITY}** |"
+                    printf '%s\n' "| **Format** | **H.264/AAC** (Optimized for Android VLC) |"
+                    printf '%s\n' "| **Status** | **Complete (100%)** |"
+                    printf '%s\n' "| **Password Protected** | **YES** |"
+                    printf '%s\n' ""
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "## Download Link"
+                    printf '%s\n' ""
+                    printf '%s\n' "| # | File | Link |"
+                    printf '%s\n' "|---|------|------|"
+                    printf '%s\n' "| 1 | \`${FINAL_FOLDER_NAME}.zip\` | [Download](${RAW_LINK}) |"
+                    printf '%s\n' ""
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "## How to Play on Android VLC"
+                    printf '%s\n' ""
+                    printf '%s\n' "1. Download and extract the zip file"
+                    printf '%s\n' "2. Open VLC → Browse → Select the video"
+                    printf '%s\n' "3. **Plays smoothly with hardware acceleration!**"
+                    printf '%s\n' ""
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "*This tool created by [avasam.ir](https://avasam.ir)*"
+                  } > "$README_FILE"
+
+                  echo "Created password-protected zip archive and README.md"
+
                 else
-                  mv "$FINAL_VIDEO_FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}.${VIDEO_EXT}"
-                  ARCHIVE_NAME="${FINAL_FOLDER_NAME}.${VIDEO_EXT}"
-                fi
-                rm -f "$FINAL_VIDEO_FILE"
-                
-                FILE_ENCODED=$(urlencode "$ARCHIVE_NAME")
-                RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
-                
-                DOWNLOAD_LINKS_MD="| 1 | \`${ARCHIVE_NAME}\` | [Download](${RAW_LINK}) |"
-                PART_COUNT=1
-                TOTAL_SIZE_MB="$SIZE_MB"
-              fi
-              
-              # ساخت فایل README.md
-              README_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
-              {
-                printf '%s\n' "# 🎬 ${FILENAME_NO_EXT}"
-                printf '%s\n' ""
-                
-                # افزودن thumbnail
-                if [ -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg" ]; then
-                  THUMB_ENCODED=$(urlencode "thumbnail.jpg")
-                  THUMB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${THUMB_ENCODED}"
-                  printf '%s\n' "<div align=\"center\">"
-                  printf '%s\n' "  <picture>"
-                  printf '%s\n' "    <img src=\"${THUMB_RAW_LINK}\" width=\"250\" />"
-                  printf '%s\n' "  </picture>"
-                  printf '%s\n' "</div>"
-                  printf '%s\n' ""
-                  printf '%s\n' "<br>"
-                  printf '%s\n' ""
-                fi
-                
-                printf '%s\n' "---"
-                printf '%s\n' ""
-                printf '%s\n' "## 📋 Video Information"
-                printf '%s\n' ""
-                printf '%s\n' "| Property | Value |"
-                printf '%s\n' "|----------|-------|"
-                printf '%s\n' "| **Video Name** | \`${FILENAME_NO_EXT}\` |"
-                printf '%s\n' "| **Original Link** | [YouTube Video](${URL}) |"
-                printf '%s\n' "| **Total Size** | **${PART_COUNT} part(s)** - **${TOTAL_SIZE_MB} MB** |"
-                printf '%s\n' "| **Quality** | **${QUALITY}p** |"
-                printf '%s\n' "| **Codec** | **H.264 / AAC** (Optimized for Android VLC) |"
-                printf '%s\n' "| **Status** | ✅ **Ready for mobile playback** |"
-                if [ -n "$ZIP_PASSWORD" ]; then
-                  printf '%s\n' "| **Password Protected** | 🔒 **YES** |"
-                else
-                  printf '%s\n' "| **Password Protected** | 🔓 **NO** |"
-                fi
-                printf '%s\n' ""
-                printf '%s\n' "---"
-                printf '%s\n' ""
-                printf '%s\n' "## 📥 Download Links"
-                printf '%s\n' ""
-                printf '%s\n' "| # | File | Link |"
-                printf '%s\n' "|---|------|------|"
-                printf '%s' "${DOWNLOAD_LINKS_MD}"
-                printf '%s\n' ""
-                printf '%s\n' "---"
-                printf '%s\n' ""
-                printf '%s\n' "## 📱 How to Play on Android VLC"
-                printf '%s\n' ""
-                printf '%s\n' "This video has been **optimized** for smooth playback on VLC Android:"
-                printf '%s\n' ""
-                printf '%s\n' "1. Download the file(s) above"
-                printf '%s\n' "2. Extract if needed (use ZArchiver for password-protected files)"
-                printf '%s\n' "3. Open VLC → Browse → Select the video file"
-                printf '%s\n' "4. **No lag!** The video will play smoothly with hardware acceleration"
-                printf '%s\n' ""
-                printf '%s\n' "> 💡 **Tip:** For the best experience, enable Hardware Acceleration in VLC Settings → Video"
-                printf '%s\n' ""
-                printf '%s\n' "---"
-                printf '%s\n' ""
-                printf '%s\n' "*🎬 Optimized by AVASAM - Smooth playback guaranteed on Android VLC*"
-                printf '%s\n' ""
-                printf '%s\n' "[AVASAM.IR](https://avasam.ir)"
-              } > "$README_FILE"
-              
-              echo "✅ Video optimized and packaged: $FILENAME_NO_EXT"
+                  echo "$BASENAME - copying directly (no archive needed)"
+
+                  cp "$FINAL_FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}.${EXT}"
+
+                  SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
+                  FILE_ENCODED=$(urlencode "${FINAL_FOLDER_NAME}.${EXT}")
+                  RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
+
+                  README_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+                  {
+                    printf '%s\n' "# ${FILENAME_NO_EXT}"
+                    printf '%s\n' ""
+
+                    if [ -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg" ]; then
+                      THUMB_ENCODED=$(urlencode "thumbnail.jpg")
+                      THUMB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${THUMB_ENCODED}"
+                      printf '%s\n' "<div align=\"center\">"
+                      printf '%s\n' "  <picture>"
+                      printf '%s\n' "    <img src=\"${THUMB_RAW_LINK}\" alt=\"Video Thumbnail\" width=\"250\" />"
+                      printf '%s\n' "  </picture>"
+                      printf '%s\n' "</div>"
+                      printf '%s\n' ""
+                      printf '%s\n' "<br>"
+                      printf '%s\n' ""
+                    fi
+
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "## Video Information"
+                    printf '%s\n' ""
+                    printf '%s\n' "| Property | Value |"
+                    printf '%s\n' "|----------|-------|"
+                    printf '%s\n' "| **Video Name** | \`${FILENAME_NO_EXT}\` |"
+                    printf '%s\n' "| **Original Link** | [YouTube Video](${URL}) |"
+                    printf '%s\n' "| **Total Size** | **1 file** (no split) - **${SIZE_MB} MB** |"
+                    printf '%s\n' "| **Quality** | **${QUALITY}** |"
+                    printf '%s\n' "| **Format** | **H.264/AAC** (Optimized for Android VLC) |"
+                    printf '%s\n' "| **Status** | **Complete (100%)** |"
+                    printf '%s\n' "| **Password Protected** | **NO** |"
+                    printf '%s\n' ""
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "## Download Link"
+                    printf '%s\n' ""
+                    printf '%s\n' "| # | File | Link |"
+                    printf '%s\n' "|---|------|------|"
+                    printf '%s\n' "| 1 | \`${FINAL_FOLDER_NAME}.${EXT}\` | [Download](${RAW_LINK}) |"
+                    printf '%s\n' ""
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "Ready to use — optimized for smooth Android VLC playback!"
+                    printf '%s\n' ""
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "*This tool created by [avasam.ir](https://avasam.ir)*"
+                  } > "$README_FILE"
+
+                  echo "Copied file and created README.md"
+                fi              fi
+              # حذف فایل موقت
+              rm -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/optimized.mp4" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/original.*" 2>/dev/null || true
             done
-            
             rm -rf "$TMP_DIR"
           done
-          
           echo "$BACKUP_DIR" > /tmp/backup_dir_path.txt
           echo "REPO_OWNER_ENV=${REPO_OWNER_ENV}" > /tmp/env_vars.txt
           echo "REPO_NAME_ENV=${REPO_NAME_ENV}" >> /tmp/env_vars.txt
@@ -496,9 +605,142 @@ jobs:
           BRANCH=${BRANCH_ENV}
           mapfile -t URL_LIST < /tmp/yt_urls.txt
 
-          # ... (بخش دانلود زیرنویس مانند قبل باقی می‌ماند) ...
-          
-          echo "✅ Subtitle download completed"
+          sub_download() {
+            local MODE=$1; local OUT="$2"; local SURL="$3";
+            local SUB_DIR=$(dirname "$OUT")
+            sub_count() { find "$SUB_DIR" -type f \( -name "*.vtt" -o -name "*.srt" \) 2>/dev/null | wc -l; }
+            fa_count()  { find "$SUB_DIR" -type f \( -name "*.fa.vtt" -o -name "*.fa.srt" \) 2>/dev/null | wc -l; }
+            en_count()  { find "$SUB_DIR" -type f \( -name "*.en.vtt" -o -name "*.en.srt" \) 2>/dev/null | wc -l; }
+            sub_flags() {
+              case $MODE in
+                all)        echo "--write-sub --sub-langs fa,en";;
+                fa-native)  echo "--write-sub --sub-langs fa";;
+                fa-auto)    echo "--write-auto-sub --sub-langs fa";;
+                en-auto)    echo "--write-auto-sub --sub-langs en";;
+                auto-both)  echo "--write-auto-sub --sub-langs en,fa";;
+              esac
+            }
+            SFLAGS=$(sub_flags)
+            COMMON_SUB="--sub-format vtt/srt/best --convert-subs vtt --skip-download --no-playlist --no-check-certificates --output ${OUT}"
+            for METHOD in 1 2 3 4 5 6 7 8; do
+              echo "  [subtitle] method $METHOD ..."
+              case $METHOD in
+                 1) yt-dlp --proxy "socks5://127.0.0.1:1080" --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" $SFLAGS $COMMON_SUB "$SURL" 2>&1 || true;;
+                 2) yt-dlp --proxy "socks5://127.0.0.1:1080" --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:npm --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" $SFLAGS $COMMON_SUB "$SURL" 2>&1 || true;;
+                 3) yt-dlp --proxy "socks5://127.0.0.1:1080" --extractor-args "youtube:player_client=web,mweb,android_vr" --js-runtimes deno --remote-components ejs:github $SFLAGS $COMMON_SUB "$SURL" 2>&1 || true;;
+                 4) yt-dlp --proxy "socks5://127.0.0.1:1080" --extractor-args "youtube:player_client=mweb" $SFLAGS $COMMON_SUB "$SURL" 2>&1 || true;;
+                 5) yt-dlp --proxy "socks5://127.0.0.1:1080" --extractor-args "youtube:player_client=android_vr" $SFLAGS $COMMON_SUB "$SURL" 2>&1 || true;;
+                 6) yt-dlp --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github $SFLAGS $COMMON_SUB "$SURL" 2>&1 || true;;
+                 7) yt-dlp --extractor-args "youtube:player_client=mweb" $SFLAGS $COMMON_SUB "$SURL" 2>&1 || true;;
+                 8) yt-dlp --proxy "socks5://127.0.0.1:1080" --extractor-args "youtube:player_client=android" --user-agent "Mozilla/5.0 (Linux; Android 12; SM-S906N Build/QP1A.190711.020) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36" $SFLAGS $COMMON_SUB "$SURL" 2>&1 || true;;
+              esac
+              if [ "$MODE" = "fa-native" ] || [ "$MODE" = "fa-auto" ]; then
+                [ "$(fa_count)" -gt 0 ] && { echo "  [subtitle] ✅ success with method $METHOD"; return 0; }
+              elif [ "$MODE" = "en-auto" ]; then
+                [ "$(en_count)" -gt 0 ] && { echo "  [subtitle] ✅ success with method $METHOD"; return 0; }
+              elif [ "$MODE" = "auto-both" ]; then
+                if [ "$(en_count)" -gt 0 ] && [ "$(fa_count)" -gt 0 ]; then
+                  echo "  [subtitle] ✅ success with method $METHOD (both en+fa downloaded)"; return 0;
+                fi
+              else
+                [ "$(sub_count)" -gt 0 ] && { echo "  [subtitle] ✅ success with method $METHOD"; return 0; }
+              fi
+              sleep 1
+            done
+            return 1
+          }
+
+          URL_INDEX=0
+          while IFS='|' read -r ORIGINAL_NAME FOLDER_NAME; do
+            URL_INDEX=$((URL_INDEX + 1)); URL="${URL_LIST[$((URL_INDEX - 1))]}";
+            [ -z "$FOLDER_NAME" ] && continue
+            SUBTITLE_DIR="$BACKUP_DIR/${FOLDER_NAME}/subtitle"; mkdir -p "$SUBTITLE_DIR";
+            OUT_TMPL="${SUBTITLE_DIR}/%(title)s"
+            echo "Downloading subtitles for: $FOLDER_NAME"
+            sub_download "all" "$OUT_TMPL" "$URL" || true
+            EN_COUNT=$(find "$SUBTITLE_DIR" -type f \( -name "*.en.vtt" -o -name "*.en.srt" \) 2>/dev/null | wc -l)
+            FA_COUNT=$(find "$SUBTITLE_DIR" -type f \( -name "*.fa.vtt" -o -name "*.fa.srt" \) 2>/dev/null | wc -l)
+            if [ "$EN_COUNT" -eq 0 ] || [ "$FA_COUNT" -eq 0 ]; then
+              sub_download "auto-both" "$OUT_TMPL" "$URL" || true
+            fi
+            SUB_COUNT=$(find "$SUBTITLE_DIR" -type f 2>/dev/null | wc -l)
+            if [ "$SUB_COUNT" -eq 0 ]; then
+              echo "  (no subtitles available for this video)"
+              rmdir "$SUBTITLE_DIR" 2>/dev/null || true
+            else
+              echo ""
+              echo "→ Subtitle files downloaded ($SUB_COUNT file(s)):"
+              find "$SUBTITLE_DIR" -type f 2>/dev/null | while read -r SUB_FILE; do
+                echo "  • $(basename "$SUB_FILE")"
+              done
+
+              ZIP_PATH="$BACKUP_DIR/${FOLDER_NAME}/subtitle.zip"
+              echo ""
+              echo "→ Zipping subtitles → subtitle.zip ..."
+
+              if (cd "$SUBTITLE_DIR" && zip -j "$ZIP_PATH" ./* 2>&1); then
+                rm -rf "$SUBTITLE_DIR"
+
+                if [ -f "$ZIP_PATH" ]; then
+                  ZIP_SIZE_MB=$(echo "scale=2; $(stat -c%s "$ZIP_PATH" 2>/dev/null || echo 0) / 1024 / 1024" | bc 2>/dev/null || echo "0.00")
+                  echo "✅ subtitle.zip created (${ZIP_SIZE_MB} MB)"
+                else
+                  echo "⚠️  Failed to create subtitle.zip - continuing without subtitles"
+                  rm -rf "$SUBTITLE_DIR" 2>/dev/null || true
+                  continue
+                fi
+              else
+                echo "⚠️  Zip command failed - continuing without subtitles"
+                rm -rf "$SUBTITLE_DIR" 2>/dev/null || true
+                continue
+              fi
+
+              FOLDER_ENCODED=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$FOLDER_NAME" 2>/dev/null || echo "$FOLDER_NAME")
+              SUB_ZIP_ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('subtitle.zip', safe=''))" 2>/dev/null || echo "subtitle.zip")
+              SUB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${SUB_ZIP_ENCODED}"
+
+              README_FILE="$BACKUP_DIR/${FOLDER_NAME}/README.md"
+              if [ -f "$README_FILE" ]; then
+                SUB_SECTION_FILE=$(mktemp 2>/dev/null || echo "/tmp/sub_section_$")
+                if [ -n "$SUB_SECTION_FILE" ]; then
+                  {
+                    printf '%s\n' ""
+                    printf '%s\n' "---"
+                    printf '%s\n' ""
+                    printf '%s\n' "## 🔤 Subtitles"
+                    printf '%s\n' ""
+                    printf '%s\n' "| # | File | Link |"
+                    printf '%s\n' "|---|------|------|"
+                    printf '%s\n' "| 1 | \`subtitle.zip\` | [Download](${SUB_RAW_LINK}) |"
+                    printf '%s\n' ""
+                    printf '%s\n' "> Contains all available subtitle languages. Extract to get \`.vtt\` files."
+                  } > "$SUB_SECTION_FILE" 2>/dev/null || true
+
+                  DOWNLOAD_LINE=$(grep -n "^## Download Link" "$README_FILE" 2>/dev/null | head -1 | cut -d: -f1)
+                  if [ -n "$DOWNLOAD_LINE" ] && [ "$DOWNLOAD_LINE" -gt 0 ] 2>/dev/null; then
+                    INSERT_AT=$((DOWNLOAD_LINE - 2))
+                    if [ "$INSERT_AT" -lt 1 ]; then
+                      INSERT_AT=$((DOWNLOAD_LINE - 1))
+                    fi
+                    if head -n "$INSERT_AT" "$README_FILE" > "${README_FILE}.tmp" 2>/dev/null; then
+                      cat "$SUB_SECTION_FILE" >> "${README_FILE}.tmp" 2>/dev/null || true
+                      printf '\n' >> "${README_FILE}.tmp" 2>/dev/null || true
+                      tail -n "+$((INSERT_AT + 1))" "$README_FILE" >> "${README_FILE}.tmp" 2>/dev/null || true
+                      mv "${README_FILE}.tmp" "$README_FILE" 2>/dev/null && echo "README patched with subtitle section." || echo "⚠️  README patch failed."
+                    fi
+                  else
+                    cat "$SUB_SECTION_FILE" >> "$README_FILE" 2>/dev/null && echo "README appended with subtitle download link."
+                  fi
+                  rm -f "$SUB_SECTION_FILE" 2>/dev/null || true
+                fi
+              fi
+            fi
+          done < /tmp/video_info.txt
+
+          echo ""
+          echo "Subtitle download phase complete."
+          set -e
+          echo "✅ Subtitle step completed"
           exit 0
 
       - name: Stop WARP Container
@@ -517,20 +759,54 @@ jobs:
 
           BACKUP_FILE_COUNT=$(find "$BACKUP_DIR" -type f 2>/dev/null | wc -l)
           if [ "$BACKUP_FILE_COUNT" -eq 0 ]; then
-            echo "No files to push. Exiting."
+            echo "WARNING: No files in backup directory — all downloads may have failed."
+            echo "Ensuring videos/ folder exists in repository with a master README..."
+
+            git fetch origin "$BRANCH"
+            git reset --hard origin/"$BRANCH"
+
+            mkdir -p videos
+
+            if [ ! -f "videos/README.md" ]; then
+              {
+                echo "# DOWNLOADED VIDEOS LIST :"
+                echo ""
+                echo "----"
+                echo ""
+                echo "> No videos downloaded yet."
+              } > videos/README.md
+              git add -f videos/README.md
+              if ! git diff --cached --quiet; then
+                git commit -m "[AVASAM] Initialize videos folder [skip ci]"
+                PUSH_RETRY=0
+                while [ $PUSH_RETRY -lt 5 ]; do
+                  PUSH_RETRY=$((PUSH_RETRY + 1))
+                  if timeout 60 git push origin HEAD:"$BRANCH"; then
+                    echo "videos/ folder initialized and pushed."
+                    break
+                  else
+                    echo "Push failed, retry $PUSH_RETRY/5..."
+                    sleep 3
+                  fi
+                done
+              else
+                echo "videos/README.md already exists, nothing to push."
+              fi
+            else
+              echo "videos/ folder already exists in repository."
+            fi
+
+            echo "No video files to push. Exiting."
             exit 0
           fi
 
+          urlencode() {
+            python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
+          }
+
           regenerate_master_readme() {
             MASTER_README="videos/README.md"
-            { 
-              echo "# 📱 DOWNLOADED VIDEOS (Optimized for Mobile)"
-              echo ""
-              echo "All videos are **optimized for smooth playback** on Android VLC (H.264 codec)"
-              echo ""
-              echo "---"
-              echo ""
-            } > "$MASTER_README"
+            { echo "# DOWNLOADED VIDEOS LIST :"; echo ""; echo "----"; echo ""; } > "$MASTER_README"
             NUM=0
             for folder in videos/*/; do
               [ -d "$folder" ] || continue
@@ -553,7 +829,7 @@ jobs:
           git add -f videos/README.md
 
           if ! git diff --cached --quiet; then
-            git commit -m "[AVASAM] Download optimized videos for mobile [skip ci]"
+            git commit -m "[AVASAM] YouTube download [skip ci]"
             PUSH_RETRY=0
             while [ $PUSH_RETRY -lt 10 ]; do
               PUSH_RETRY=$((PUSH_RETRY + 1))
@@ -569,12 +845,11 @@ jobs:
                 git add -f videos/
                 regenerate_master_readme
                 git add -f videos/README.md
-                git diff --cached --quiet || git commit -m "[AVASAM] Download optimized videos for mobile [skip ci]"
+                git diff --cached --quiet || git commit -m "[AVASAM] YouTube download [skip ci]"
               fi
             done
           fi
           echo "=========================================="
-          echo "✅ All files pushed successfully!"
-          echo "🎬 Videos are optimized for smooth playback on Android VLC"
+          echo "All files pushed successfully!"
           echo "made in AVASAM (https://avasam.ir)"
           echo "=========================================="
