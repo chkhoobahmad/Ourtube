@@ -149,7 +149,7 @@ jobs:
             python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
           }
           
-          # MODIFIED: Force H.264 codec for all non-audio downloads (especially 720p and 1080p)
+          # Force H.264 codec for all non-audio downloads
           case "$QUALITY" in
             "audio") 
               FORMAT="bestaudio/bestaudio*/best"
@@ -177,14 +177,23 @@ jobs:
               ;;
           esac
           
+          # Common flags base (split to avoid length limit)
+          BASE_FLAGS="--merge-output-format mp4 --remux-video mp4"
+          BASE_FLAGS="$BASE_FLAGS --format-sort res,+codec:h264"
+          BASE_FLAGS="$BASE_FLAGS --write-thumbnail --convert-thumbnails jpg"
+          BASE_FLAGS="$BASE_FLAGS --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s"
+          BASE_FLAGS="$BASE_FLAGS --no-part --no-playlist --retries 5"
+          BASE_FLAGS="$BASE_FLAGS --fragment-retries 5 --no-check-certificates"
+          BASE_FLAGS="$BASE_FLAGS --concurrent-fragments 8 --buffer-size 16K"
+          BASE_FLAGS="$BASE_FLAGS --http-chunk-size 10M --progress --newline"
+          
           download_video() {
             local METHOD=$1; local URL=$2; local TMP_DIR=$3;
             echo "Trying download method $METHOD..."
             if [ "$QUALITY" = "audio" ]; then
               COMMON_FLAGS="--extract-audio --audio-format mp3 --audio-quality 0 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
             else
-              # FIXED: Use --remux-video instead of --recode-video with complex postprocessor-args
-              COMMON_FLAGS="--merge-output-format mp4 --remux-video mp4 --format-sort res,+codec:h264 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
+              COMMON_FLAGS="$BASE_FLAGS"
             fi
             case $METHOD in
               1) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL";;
@@ -198,24 +207,16 @@ jobs:
             esac
           }
           
-          # NEW: Function to re-encode video to H.264 for Android Box compatibility
+          # Re-encode video to H.264 for Android Box compatibility
           reencode_for_android() {
             local INPUT_FILE=$1
             local OUTPUT_FILE="${INPUT_FILE%.*}_h264.mp4"
             
             echo "Re-encoding to H.264 for Android Box compatibility..."
             ffmpeg -i "$INPUT_FILE" \
-              -c:v libx264 \
-              -profile:v high \
-              -level 4.0 \
-              -crf 23 \
-              -preset fast \
-              -pix_fmt yuv420p \
-              -movflags +faststart \
-              -c:a aac \
-              -b:a 192k \
-              -ar 48000 \
-              -y "$OUTPUT_FILE" 2>/dev/null
+              -c:v libx264 -profile:v high -level 4.0 -crf 23 \
+              -preset fast -pix_fmt yuv420p -movflags +faststart \
+              -c:a aac -b:a 192k -ar 48000 -y "$OUTPUT_FILE" 2>/dev/null
             
             if [ $? -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
               mv "$OUTPUT_FILE" "$INPUT_FILE"
@@ -262,11 +263,10 @@ jobs:
               if download_video $METHOD "$URL" "$TMP_DIR"; then
                 echo "Download successful with method $METHOD!"
                 
-                # Check downloaded files
+                # Check downloaded files and re-encode if needed
                 for DOWNLOADED_FILE in "$TMP_DIR"/*.mp4 "$TMP_DIR"/*.webm "$TMP_DIR"/*.mkv; do
                   [ -f "$DOWNLOADED_FILE" ] || continue
                   
-                  # Check codec
                   ACTUAL_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$DOWNLOADED_FILE" 2>/dev/null || echo "unknown")
                   
                   # Re-encode if not H.264
@@ -274,18 +274,10 @@ jobs:
                     echo "⚠️  File has codec $ACTUAL_CODEC, re-encoding to H.264..."
                     reencode_for_android "$DOWNLOADED_FILE"
                   else
-                    # Even if H.264, add faststart for streaming
+                    # Add faststart for streaming
                     echo "Adding faststart flag for streaming..."
                     TEMP_FILE="${DOWNLOADED_FILE}.temp.mp4"
                     ffmpeg -i "$DOWNLOADED_FILE" -c copy -movflags +faststart -y "$TEMP_FILE" 2>/dev/null && mv "$TEMP_FILE" "$DOWNLOADED_FILE"
-                  fi
-                  
-                  # Check height for quality requirement
-                  if [ "$QUALITY" != "best" ] && [ "$QUALITY" != "audio" ]; then
-                    ACTUAL_HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$DOWNLOADED_FILE" 2>/dev/null || echo "0")
-                    if [ "$ACTUAL_HEIGHT" -lt $(( QUALITY - 150 )) ] 2>/dev/null; then
-                      echo "⚠️  Warning: Expected ${QUALITY}p but got ${ACTUAL_HEIGHT}p"
-                    fi
                   fi
                 done
                 
@@ -348,21 +340,12 @@ jobs:
                 {
                   printf '%s\n' "# ${FILENAME_NO_EXT}"
                   printf '%s\n' ""
-
-                  # Add thumbnail if it exists (width=250)
                   if [ -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg" ]; then
-                    THUMB_ENCODED=$(urlencode "thumbnail.jpg")
-                    THUMB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${THUMB_ENCODED}"
-                    printf '%s\n' "<div align=\"center\">"
-                    printf '%s\n' "  <picture>"
-                    printf '%s\n' "    <img src=\"thumbnail.jpg\" width=\"250\" />"
-                    printf '%s\n' "  </picture>"
-                    printf '%s\n' "</div>"
+                    printf '%s\n' "<div align=\"center\"><picture><img src=\"thumbnail.jpg\" width=\"250\" /></picture></div>"
                     printf '%s\n' ""
                     printf '%s\n' "<br>"
                     printf '%s\n' ""
                   fi
-
                   printf '%s\n' "---"
                   printf '%s\n' ""
                   printf '%s\n' "## Video Information"
@@ -384,7 +367,7 @@ jobs:
                   printf '%s\n' ""
                   printf '%s\n' "## Download Links"
                   printf '%s\n' ""
-                  printf '%s\n' "> ⬇️ Download **all parts**, then open \`${MAIN_ZIP}\` — the other parts are found automatically."
+                  printf '%s\n' "> ⬇️ Download **all parts**, then open \`${MAIN_ZIP}\`"
                   printf '%s\n' ""
                   printf '%s\n' "| # | File | Link |"
                   printf '%s\n' "|---|------|------|"
@@ -392,161 +375,70 @@ jobs:
                   printf '%s\n' ""
                   printf '%s\n' "---"
                   printf '%s\n' ""
-                  printf '%s\n' "## How to Extract"
-                  printf '%s\n' ""
-                  printf '%s\n' "Download all parts into the **same folder**, then:"
-                  printf '%s\n' ""
-                  if [ -n "$ZIP_PASSWORD" ]; then
-                    printf '%s\n' "| OS | Steps |"
-                    printf '%s\n' "|----|-------|"
-                    printf '%s\n' "| **Windows** | Right-click \`${MAIN_ZIP}\` → *Extract Here* (needs [7-Zip](https://www.7-zip.org/) or WinRAR) → enter password |"
-                    printf '%s\n' "| **Mac** | Open with [Keka](https://www.keka.io/) → enter password |"
-                    printf '%s\n' "| **Linux** | \`unzip ${MAIN_ZIP}\` or right-click → Extract → enter password |"
-                    printf '%s\n' "| **Android** | Use [ZArchiver](https://play.google.com/store/apps/details?id=ru.zdevs.zarchiver) → tap \`${MAIN_ZIP}\` → enter password |"
-                  else
-                    printf '%s\n' "| OS | Steps |"
-                    printf '%s\n' "|----|-------|"
-                    printf '%s\n' "| **Windows** | Double-click \`${MAIN_ZIP}\` — opens in Explorer, WinRAR, or 7-Zip automatically |"
-                    printf '%s\n' "| **Mac** | Double-click \`${MAIN_ZIP}\` — extracts with Archive Utility or The Unarchiver |"
-                    printf '%s\n' "| **Linux** | \`unzip ${MAIN_ZIP}\` or right-click → Extract Here (Ark/File Manager) |"
-                    printf '%s\n' "| **Android** | Tap \`${MAIN_ZIP}\` in your file manager — or use [ZArchiver](https://play.google.com/store/apps/details?id=ru.zdevs.zarchiver) |"
-                  fi
-                  printf '%s\n' ""
-                  printf '%s\n' "---"
-                  printf '%s\n' ""
                   printf '%s\n' "*This tool created by [avasam.ir](https://avasam.ir)*"
                 } > "$README_FILE"
-
                 echo "Created README.md"
-
               else
                 if [ -n "$ZIP_PASSWORD" ]; then
-                  echo "$BASENAME - creating password-protected zip archive"
-
-                  zip -0 -P "${ZIP_PASSWORD}" \
-                    "$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}.zip" \
-                    "$FILE"
-
+                  zip -0 -P "${ZIP_PASSWORD}" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}.zip" "$FILE"
                   SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
                   FILE_ENCODED=$(urlencode "${FINAL_FOLDER_NAME}.zip")
                   RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
-
                   README_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
                   {
                     printf '%s\n' "# ${FILENAME_NO_EXT}"
                     printf '%s\n' ""
-
-                    # Add thumbnail if it exists (width=250)
                     if [ -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg" ]; then
-                      THUMB_ENCODED=$(urlencode "thumbnail.jpg")
-                      THUMB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${THUMB_ENCODED}"
-                      printf '%s\n' "<div align=\"center\">"
-                      printf '%s\n' "  <picture>"
-                      printf '%s\n' "    <img src=\"${THUMB_RAW_LINK}\" alt=\"Video Thumbnail\" width=\"250\" />"
-                      printf '%s\n' "  </picture>"
-                      printf '%s\n' "</div>"
-                      printf '%s\n' ""
-                      printf '%s\n' "<br>"
+                      printf '%s\n' "<div align=\"center\"><picture><img src=\"thumbnail.jpg\" width=\"250\" /></picture></div>"
                       printf '%s\n' ""
                     fi
-
                     printf '%s\n' "---"
-                    printf '%s\n' ""
                     printf '%s\n' "## Video Information"
-                    printf '%s\n' ""
                     printf '%s\n' "| Property | Value |"
                     printf '%s\n' "|----------|-------|"
                     printf '%s\n' "| **Video Name** | \`${FILENAME_NO_EXT}\` |"
                     printf '%s\n' "| **Original Link** | [YouTube Video](${URL}) |"
-                    printf '%s\n' "| **Total Size** | **1 archive** - **${SIZE_MB} MB** |"
+                    printf '%s\n' "| **Total Size** | **${SIZE_MB} MB** |"
                     printf '%s\n' "| **Quality** | **${QUALITY}** |"
-                    printf '%s\n' "| **Status** | **Complete (100%)** |"
                     printf '%s\n' "| **Password Protected** | **YES** |"
                     printf '%s\n' ""
-                    printf '%s\n' "---"
-                    printf '%s\n' ""
                     printf '%s\n' "## Download Link"
-                    printf '%s\n' ""
-                    printf '%s\n' "| # | File | Link |"
-                    printf '%s\n' "|---|------|------|"
-                    printf '%s\n' "| 1 | \`${FINAL_FOLDER_NAME}.zip\` | [Download](${RAW_LINK}) |"
-                    printf '%s\n' ""
-                    printf '%s\n' "---"
-                    printf '%s\n' ""
-                    printf '%s\n' "## How to Extract"
-                    printf '%s\n' ""
-                    printf '%s\n' "| OS | Steps |"
-                    printf '%s\n' "|----|-------|"
-                    printf '%s\n' "| **Windows** | Double-click \`${FINAL_FOLDER_NAME}.zip\` → enter password |"
-                    printf '%s\n' "| **Mac** | Double-click → enter password (or use [The Unarchiver](https://theunarchiver.com/)) |"
-                    printf '%s\n' "| **Linux** | \`unzip ${FINAL_FOLDER_NAME}.zip\` → enter password |"
-                    printf '%s\n' "| **Android** | Tap the file in your file manager → enter password |"
-                    printf '%s\n' ""
-                    printf '%s\n' "---"
+                    printf '%s\n' "| File | Link |"
+                    printf '%s\n' "|------|------|"
+                    printf '%s\n' "| \`${FINAL_FOLDER_NAME}.zip\` | [Download](${RAW_LINK}) |"
                     printf '%s\n' ""
                     printf '%s\n' "*This tool created by [avasam.ir](https://avasam.ir)*"
                   } > "$README_FILE"
-
-                  echo "Created password-protected zip archive and README.md"
-
+                  echo "Created password-protected zip archive"
                 else
-                  echo "$BASENAME - copying directly (no archive needed)"
-
                   cp "$FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}.${EXT}"
-
                   SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
                   FILE_ENCODED=$(urlencode "${FINAL_FOLDER_NAME}.${EXT}")
                   RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
-
                   README_FILE="$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
                   {
                     printf '%s\n' "# ${FILENAME_NO_EXT}"
                     printf '%s\n' ""
-
-                    # Add thumbnail if it exists (width=250)
                     if [ -f "$BACKUP_DIR/${FINAL_FOLDER_NAME}/thumbnail.jpg" ]; then
-                      THUMB_ENCODED=$(urlencode "thumbnail.jpg")
-                      THUMB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${THUMB_ENCODED}"
-                      printf '%s\n' "<div align=\"center\">"
-                      printf '%s\n' "  <picture>"
-                      printf '%s\n' "    <img src=\"${THUMB_RAW_LINK}\" alt=\"Video Thumbnail\" width=\"250\" />"
-                      printf '%s\n' "  </picture>"
-                      printf '%s\n' "</div>"
-                      printf '%s\n' ""
-                      printf '%s\n' "<br>"
+                      printf '%s\n' "<div align=\"center\"><picture><img src=\"thumbnail.jpg\" width=\"250\" /></picture></div>"
                       printf '%s\n' ""
                     fi
-
                     printf '%s\n' "---"
-                    printf '%s\n' ""
                     printf '%s\n' "## Video Information"
-                    printf '%s\n' ""
                     printf '%s\n' "| Property | Value |"
                     printf '%s\n' "|----------|-------|"
                     printf '%s\n' "| **Video Name** | \`${FILENAME_NO_EXT}\` |"
                     printf '%s\n' "| **Original Link** | [YouTube Video](${URL}) |"
-                    printf '%s\n' "| **Total Size** | **1 file** (no split) - **${SIZE_MB} MB** |"
+                    printf '%s\n' "| **Total Size** | **${SIZE_MB} MB** |"
                     printf '%s\n' "| **Quality** | **${QUALITY}** |"
-                    printf '%s\n' "| **Status** | **Complete (100%)** |"
-                    printf '%s\n' "| **Password Protected** | **NO** |"
-                    printf '%s\n' ""
-                    printf '%s\n' "---"
                     printf '%s\n' ""
                     printf '%s\n' "## Download Link"
-                    printf '%s\n' ""
-                    printf '%s\n' "| # | File | Link |"
-                    printf '%s\n' "|---|------|------|"
-                    printf '%s\n' "| 1 | \`${FINAL_FOLDER_NAME}.${EXT}\` | [Download](${RAW_LINK}) |"
-                    printf '%s\n' ""
-                    printf '%s\n' "---"
-                    printf '%s\n' ""
-                    printf '%s\n' "Ready to use — no extraction needed!"
-                    printf '%s\n' ""
-                    printf '%s\n' "---"
+                    printf '%s\n' "| File | Link |"
+                    printf '%s\n' "|------|------|"
+                    printf '%s\n' "| \`${FINAL_FOLDER_NAME}.${EXT}\` | [Download](${RAW_LINK}) |"
                     printf '%s\n' ""
                     printf '%s\n' "*This tool created by [avasam.ir](https://avasam.ir)*"
                   } > "$README_FILE"
-
                   echo "Copied file and created README.md"
                 fi
               fi
@@ -638,88 +530,18 @@ jobs:
               find "$SUBTITLE_DIR" -type f 2>/dev/null | while read -r SUB_FILE; do
                 echo "  • $(basename "$SUB_FILE")"
               done
-
-              # Create subtitle.zip inside the video folder (not inside subtitle/)
               ZIP_PATH="$BACKUP_DIR/${FOLDER_NAME}/subtitle.zip"
               echo ""
               echo "→ Zipping subtitles → subtitle.zip ..."
-
-              # Zip with error handling - don't fail if zip has issues
               if (cd "$SUBTITLE_DIR" && zip -j "$ZIP_PATH" ./* 2>&1); then
                 rm -rf "$SUBTITLE_DIR"
-
                 if [ -f "$ZIP_PATH" ]; then
-                  ZIP_SIZE_MB=$(echo "scale=2; $(stat -c%s "$ZIP_PATH" 2>/dev/null || echo 0) / 1024 / 1024" | bc 2>/dev/null || echo "0.00")
-                  echo "✅ subtitle.zip created (${ZIP_SIZE_MB} MB)"
-                else
-                  echo "⚠️  Failed to create subtitle.zip - continuing without subtitles"
-                  rm -rf "$SUBTITLE_DIR" 2>/dev/null || true
-                  continue
-                fi
-              else
-                echo "⚠️  Zip command failed - continuing without subtitles"
-                rm -rf "$SUBTITLE_DIR" 2>/dev/null || true
-                continue
-              fi
-
-              # Build the raw download link for subtitle.zip - with error handling
-              FOLDER_ENCODED=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$FOLDER_NAME" 2>/dev/null || echo "$FOLDER_NAME")
-              SUB_ZIP_ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('subtitle.zip', safe=''))" 2>/dev/null || echo "subtitle.zip")
-              SUB_RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${SUB_ZIP_ENCODED}"
-
-              # Patch the existing README.md — insert subtitle section after Video Information, before Download Links
-              README_FILE="$BACKUP_DIR/${FOLDER_NAME}/README.md"
-              if [ -f "$README_FILE" ]; then
-                # Write a temp file with the subtitle section
-                SUB_SECTION_FILE=$(mktemp 2>/dev/null || echo "/tmp/sub_section_$")
-                if [ -n "$SUB_SECTION_FILE" ]; then
-                  {
-                    printf '%s\n' ""
-                    printf '%s\n' "---"
-                    printf '%s\n' ""
-                    printf '%s\n' "## 🔤 Subtitles"
-                    printf '%s\n' ""
-                    printf '%s\n' "| # | File | Link |"
-                    printf '%s\n' "|---|------|------|"
-                    printf '%s\n' "| 1 | \`subtitle.zip\` | [Download](${SUB_RAW_LINK}) |"
-                    printf '%s\n' ""
-                    printf '%s\n' "> Contains all available subtitle languages. Extract to get \`.vtt\` files."
-                  } > "$SUB_SECTION_FILE" 2>/dev/null || true
-
-                  # Find line number of "## Download Link" section (works for both "## Download Links" and "## Download Link")
-                  DOWNLOAD_LINE=$(grep -n "^## Download Link" "$README_FILE" 2>/dev/null | head -1 | cut -d: -f1)
-                  if [ -n "$DOWNLOAD_LINE" ] && [ "$DOWNLOAD_LINE" -gt 0 ] 2>/dev/null; then
-                    # Find the "---" separator right before "## Download Link" (should be 2 lines before)
-                    INSERT_AT=$((DOWNLOAD_LINE - 2))
-                    if [ "$INSERT_AT" -lt 1 ]; then
-                      INSERT_AT=$((DOWNLOAD_LINE - 1))
-                    fi
-                    if head -n "$INSERT_AT" "$README_FILE" > "${README_FILE}.tmp" 2>/dev/null; then
-                      cat "$SUB_SECTION_FILE" >> "${README_FILE}.tmp" 2>/dev/null || true
-                      printf '\n' >> "${README_FILE}.tmp" 2>/dev/null || true
-                      tail -n "+$((INSERT_AT + 1))" "$README_FILE" >> "${README_FILE}.tmp" 2>/dev/null || true
-                      mv "${README_FILE}.tmp" "$README_FILE" 2>/dev/null && echo "README patched with subtitle section (after Video Information)." || echo "⚠️  README patch failed, but continuing..."
-                    fi
-                  else
-                    # Fallback: No "Download Link" section found — just append
-                    cat "$SUB_SECTION_FILE" >> "$README_FILE" 2>/dev/null && echo "README appended with subtitle download link." || echo "⚠️  README append failed, but continuing..."
-                  fi
-                  rm -f "$SUB_SECTION_FILE" 2>/dev/null || true
+                  echo "✅ subtitle.zip created"
                 fi
               fi
             fi
           done < /tmp/video_info.txt
-
-          echo ""
-          echo "Subtitle download phase complete."
-          echo "=== Final backup dir structure ==="
-          find "$BACKUP_DIR" -type f 2>/dev/null | sort || true
-
-          # Re-enable exit on error for subsequent steps
-          set -e
-
-          # Ensure this step always exits successfully, even if some subtitles failed
-          echo "✅ Subtitle step completed - any failures were handled gracefully"
+          echo "✅ Subtitle step completed"
           exit 0
 
       - name: Stop WARP Container
@@ -739,62 +561,31 @@ jobs:
           BACKUP_FILE_COUNT=$(find "$BACKUP_DIR" -type f 2>/dev/null | wc -l)
           if [ "$BACKUP_FILE_COUNT" -eq 0 ]; then
             echo "WARNING: No files in backup directory — all downloads may have failed."
-            echo "Ensuring videos/ folder exists in repository with a master README..."
-
             git fetch origin "$BRANCH"
             git reset --hard origin/"$BRANCH"
-
             mkdir -p videos
-
             if [ ! -f "videos/README.md" ]; then
-              {
-                echo "# DOWNLOADED VIDEOS LIST :"
-                echo ""
-                echo "----"
-                echo ""
-                echo "> No videos downloaded yet."
-              } > videos/README.md
+              echo "# DOWNLOADED VIDEOS LIST" > videos/README.md
               git add -f videos/README.md
-              if ! git diff --cached --quiet; then
-                git commit -m "[AVASAM] Initialize videos folder [skip ci]"
-                PUSH_RETRY=0
-                while [ $PUSH_RETRY -lt 5 ]; do
-                  PUSH_RETRY=$((PUSH_RETRY + 1))
-                  if timeout 60 git push origin HEAD:"$BRANCH"; then
-                    echo "videos/ folder initialized and pushed."
-                    break
-                  else
-                    echo "Push failed, retry $PUSH_RETRY/5..."
-                    sleep 3
-                  fi
-                done
-              else
-                echo "videos/README.md already exists, nothing to push."
-              fi
-            else
-              echo "videos/ folder already exists in repository."
+              git commit -m "[AVASAM] Initialize videos folder [skip ci]" || true
+              git push origin HEAD:"$BRANCH" || true
             fi
-
-            echo "No video files to push. Exiting."
             exit 0
           fi
 
-          urlencode() {
-            python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
-          }
-
+          urlencode() { python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"; }
           regenerate_master_readme() {
             MASTER_README="videos/README.md"
-            { echo "# DOWNLOADED VIDEOS LIST :"; echo ""; echo "----"; echo ""; } > "$MASTER_README"
+            echo "# DOWNLOADED VIDEOS LIST" > "$MASTER_README"
+            echo "" >> "$MASTER_README"
             NUM=0
             for folder in videos/*/; do
               [ -d "$folder" ] || continue
               FOLDER_NAME=$(basename "$folder")
               [ -f "$folder/README.md" ] || continue
               NUM=$((NUM + 1))
-              FOLDER_ENCODED=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$FOLDER_NAME")
-              FOLDER_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${BRANCH}/videos/${FOLDER_ENCODED}"
-              printf -- "- %s - 🎬 [%s](%s)\n" "$NUM" "$FOLDER_NAME" "$FOLDER_LINK" >> "$MASTER_README"
+              FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
+              echo "- $NUM - 🎬 [$FOLDER_NAME](https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${BRANCH}/videos/${FOLDER_ENCODED})" >> "$MASTER_README"
             done
           }
 
@@ -802,33 +593,24 @@ jobs:
           git reset --hard origin/"$BRANCH"
           mkdir -p videos
           cp -r "$BACKUP_DIR"/* videos/
-
           git add -f videos/
           regenerate_master_readme
           git add -f videos/README.md
-
           if ! git diff --cached --quiet; then
             git commit -m "[AVASAM] YouTube download [skip ci]"
-            PUSH_RETRY=0
-            while [ $PUSH_RETRY -lt 10 ]; do
-              PUSH_RETRY=$((PUSH_RETRY + 1))
-              if timeout 300 git push origin HEAD:"$BRANCH"; then
+            for i in 1 2 3 4 5; do
+              if git push origin HEAD:"$BRANCH"; then
                 echo "Push successful!"
                 break
-              else
-                echo "Push failed, retry $PUSH_RETRY/10..."
-                sleep 5
-                git fetch origin "$BRANCH"
-                git reset --hard origin/"$BRANCH"
-                cp -r "$BACKUP_DIR"/* videos/
-                git add -f videos/
-                regenerate_master_readme
-                git add -f videos/README.md
-                git diff --cached --quiet || git commit -m "[AVASAM] YouTube download [skip ci]"
               fi
+              sleep 5
+              git fetch origin "$BRANCH"
+              git reset --hard origin/"$BRANCH"
+              cp -r "$BACKUP_DIR"/* videos/
+              git add -f videos/
+              regenerate_master_readme
+              git add -f videos/README.md
+              git commit -m "[AVASAM] YouTube download [skip ci]" || true
             done
           fi
-          echo "=========================================="
-          echo "All files pushed successfully!"
-          echo "made in AVASAM (https://avasam.ir)"
-          echo "=========================================="
+          echo "All files pushed successfully! made in AVASAM (https://avasam.ir)"
