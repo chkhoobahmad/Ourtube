@@ -150,14 +150,11 @@ jobs:
           }
           
           # Force H.264 codec for all non-audio downloads
-          case "$QUALITY" in
-            "audio") 
-              FORMAT="bestaudio/bestaudio*/best"
-              ;;
-            *) 
-              FORMAT="bestvideo[ext=mp4][vcodec^=avc1][height<=${QUALITY}]+bestaudio[ext=m4a]/best[ext=mp4][vcodec^=avc1][height<=${QUALITY}]/best"
-              ;;
-          esac
+          if [ "$QUALITY" = "audio" ]; then
+            FORMAT="bestaudio/bestaudio*/best"
+          else
+            FORMAT="bestvideo[ext=mp4][vcodec^=avc1][height<=${QUALITY}]+bestaudio[ext=m4a]/best[ext=mp4][vcodec^=avc1][height<=${QUALITY}]/best"
+          fi
           
           download_video() {
             local METHOD=$1; local URL=$2; local TMP_DIR=$3;
@@ -165,13 +162,12 @@ jobs:
             
             # Common flags for all downloads
             local BASE_FLAGS="--merge-output-format mp4"
-            BASE_FLAGS="$BASE_FLAGS --write-thumbnail --convert-thumbnails jpg"
+            BASE_FLAGS="$BASE_FLAGS --no-write-thumbnail"
             BASE_FLAGS="$BASE_FLAGS --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s"
             BASE_FLAGS="$BASE_FLAGS --no-part --no-playlist --retries 5"
             BASE_FLAGS="$BASE_FLAGS --fragment-retries 5 --no-check-certificates"
             BASE_FLAGS="$BASE_FLAGS --concurrent-fragments 8 --buffer-size 16K"
             BASE_FLAGS="$BASE_FLAGS --http-chunk-size 10M --progress --newline"
-            BASE_FLAGS="$BASE_FLAGS --no-write-thumbnail"  # Disable thumbnail to avoid permission issues
             
             if [ "$QUALITY" = "audio" ]; then
               local COMMON_FLAGS="--extract-audio --audio-format mp3 --audio-quality 0 $BASE_FLAGS"
@@ -180,14 +176,14 @@ jobs:
             fi
             
             case $METHOD in
-              1) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL";;
-              2) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:npm --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL";;
-              3) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web,mweb,android_vr" --js-runtimes deno --remote-components ejs:github "$URL";;
-              4) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL";;
-              5) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android_vr" "$URL";;
-              6) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github "$URL";;
-              7) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL";;
-              8) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android" --user-agent "Mozilla/5.0 (Linux; Android 12; SM-S906N Build/QP1A.190711.020) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36" "$URL";;
+              1) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL" 2>&1;;
+              2) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:npm --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL" 2>&1;;
+              3) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web,mweb,android_vr" --js-runtimes deno --remote-components ejs:github "$URL" 2>&1;;
+              4) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL" 2>&1;;
+              5) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android_vr" "$URL" 2>&1;;
+              6) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github "$URL" 2>&1;;
+              7) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL" 2>&1;;
+              8) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android" --user-agent "Mozilla/5.0 (Linux; Android 12; SM-S906N Build/QP1A.190711.020) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36" "$URL" 2>&1;;
             esac
           }
           
@@ -197,10 +193,7 @@ jobs:
             local OUTPUT_FILE="${INPUT_FILE%.*}_h264.mp4"
             
             echo "Re-encoding to H.264 for Android Box compatibility..."
-            ffmpeg -i "$INPUT_FILE" \
-              -c:v libx264 -profile:v high -level 4.0 -crf 23 \
-              -preset fast -pix_fmt yuv420p -movflags +faststart \
-              -c:a aac -b:a 192k -ar 48000 -y "$OUTPUT_FILE" 2>/dev/null
+            ffmpeg -i "$INPUT_FILE" -c:v libx264 -profile:v high -level 4.0 -crf 23 -preset fast -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 192k -ar 48000 -y "$OUTPUT_FILE" 2>/dev/null
             
             if [ $? -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
               mv "$OUTPUT_FILE" "$INPUT_FILE"
@@ -263,24 +256,33 @@ jobs:
             find "$TMP_DIR" -name "*.part" -delete
             for FILE in "$TMP_DIR"/*; do
               [ -f "$FILE" ] || continue
-              # Skip thumbnail files
+              # Skip thumbnail and small files
               if [[ "$FILE" == *.jpg ]] || [[ "$FILE" == *.webp ]] || [[ "$FILE" == *.png ]]; then 
                 rm -f "$FILE"
                 continue 
               fi
               
-              # Check and re-encode if needed
-              ACTUAL_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$FILE" 2>/dev/null || echo "unknown")
-              if [[ "$ACTUAL_CODEC" != "h264" ]] && [[ "$ACTUAL_CODEC" != "avc1"* ]] && [ "$QUALITY" != "audio" ]; then
-                echo "File has codec $ACTUAL_CODEC, re-encoding to H.264..."
-                reencode_for_android "$FILE"
-              elif [ "$QUALITY" != "audio" ]; then
-                # Add faststart for streaming
-                TEMP_FILE="${FILE}.temp.mp4"
-                ffmpeg -i "$FILE" -c copy -movflags +faststart -y "$TEMP_FILE" 2>/dev/null && mv "$TEMP_FILE" "$FILE"
+              # Check file size - skip very small files
+              FILE_SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo "0")
+              if [ "$FILE_SIZE" -lt 100000 ]; then
+                echo "File too small, skipping..."
+                rm -f "$FILE"
+                continue
               fi
               
-              SIZE=$(stat -c%s "$FILE")
+              # Check and re-encode if needed (only for non-audio)
+              if [ "$QUALITY" != "audio" ]; then
+                ACTUAL_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$FILE" 2>/dev/null || echo "unknown")
+                if [[ "$ACTUAL_CODEC" != "h264" ]] && [[ "$ACTUAL_CODEC" != "avc1"* ]]; then
+                  echo "File has codec $ACTUAL_CODEC, re-encoding to H.264..."
+                  reencode_for_android "$FILE"
+                else
+                  # Add faststart for streaming
+                  TEMP_FILE="${FILE}.temp.mp4"
+                  ffmpeg -i "$FILE" -c copy -movflags +faststart -y "$TEMP_FILE" 2>/dev/null && mv "$TEMP_FILE" "$FILE"
+                fi
+              fi
+              
               BASENAME=$(basename "$FILE")
               FILENAME_NO_EXT="${BASENAME%.*}"
               EXT="${BASENAME##*.}"
@@ -291,28 +293,28 @@ jobs:
               echo "${FILENAME_NO_EXT}|${FINAL_FOLDER_NAME}" >> /tmp/video_info.txt
               FOLDER_ENCODED=$(urlencode "${FINAL_FOLDER_NAME}")
               
-              # Simple copy without archiving for now
+              # Copy file
               cp "$FILE" "$BACKUP_DIR/${FINAL_FOLDER_NAME}/${FINAL_FOLDER_NAME}.${EXT}"
               
               # Create simple README
-              SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
+              SIZE_MB=$(echo "scale=2; $FILE_SIZE / 1024 / 1024" | bc)
               FILE_ENCODED=$(urlencode "${FINAL_FOLDER_NAME}.${EXT}")
               RAW_LINK="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
               
-              cat > "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md" << EOF
-              # ${FILENAME_NO_EXT}
+              printf "# %s\n\n" "${FILENAME_NO_EXT}" > "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "## Video Information\n\n" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "| Property | Value |\n" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "|----------|-------|\n" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "| **Video Name** | \`%s\` |\n" "${FILENAME_NO_EXT}" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "| **Original Link** | [YouTube Video](%s) |\n" "${URL}" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "| **Total Size** | **%s MB** |\n" "${SIZE_MB}" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "| **Quality** | **%s** |\n" "${QUALITY}" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "\n## Download Link\n\n" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "| File | Link |\n" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "|------|------|\n" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "| \`%s.%s\` | [Download](%s) |\n" "${FINAL_FOLDER_NAME}" "${EXT}" "${RAW_LINK}" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
+              printf "\n---\n*This tool created by [avasam.ir](https://avasam.ir)*\n" >> "$BACKUP_DIR/${FINAL_FOLDER_NAME}/README.md"
               
-              ## Video Information
-              - **Original Link**: [YouTube Video](${URL})
-              - **Total Size**: ${SIZE_MB} MB
-              - **Quality**: ${QUALITY}
-              
-              ## Download Link
-              [Download ${FINAL_FOLDER_NAME}.${EXT}](${RAW_LINK})
-              
-              ---
-              *This tool created by [avasam.ir](https://avasam.ir)*
-              EOF
               echo "Saved: ${FILENAME_NO_EXT}"
             done
             rm -rf "$TMP_DIR"
