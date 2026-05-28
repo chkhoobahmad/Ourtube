@@ -1,4 +1,4 @@
-name: 02 - 🎯 دانلود ویدئو یوتیوب اندروید
+name: 02 - 🎯 دانلود ویدئو یوتیوب
 
 on:
   workflow_dispatch:
@@ -183,8 +183,8 @@ jobs:
             if [ "$QUALITY" = "audio" ]; then
               COMMON_FLAGS="--extract-audio --audio-format mp3 --audio-quality 0 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
             else
-              # MODIFIED: Enhanced COMMON_FLAGS with H.264 encoding and faststart for smooth playback
-              COMMON_FLAGS="--merge-output-format mp4 --recode-video mp4 --postprocessor-args \"-c:v libx264 -crf 23 -preset fast -c:a aac -b:a 192k -ar 48000 -movflags +faststart\" --format-sort res,+codec:h264 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
+              # FIXED: Use --remux-video instead of --recode-video with complex postprocessor-args
+              COMMON_FLAGS="--merge-output-format mp4 --remux-video mp4 --format-sort res,+codec:h264 --write-thumbnail --convert-thumbnails jpg --no-cache-dir --output ${TMP_DIR}/%(title)s.%(ext)s --no-part --no-playlist --retries 5 --fragment-retries 5 --no-check-certificates --concurrent-fragments 8 --buffer-size 16K --http-chunk-size 10M --progress --newline"
             fi
             case $METHOD in
               1) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL";;
@@ -197,6 +197,37 @@ jobs:
               8) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android" --user-agent "Mozilla/5.0 (Linux; Android 12; SM-S906N Build/QP1A.190711.020) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36" "$URL";;
             esac
           }
+          
+          # NEW: Function to re-encode video to H.264 for Android Box compatibility
+          reencode_for_android() {
+            local INPUT_FILE=$1
+            local OUTPUT_FILE="${INPUT_FILE%.*}_h264.mp4"
+            
+            echo "Re-encoding to H.264 for Android Box compatibility..."
+            ffmpeg -i "$INPUT_FILE" \
+              -c:v libx264 \
+              -profile:v high \
+              -level 4.0 \
+              -crf 23 \
+              -preset fast \
+              -pix_fmt yuv420p \
+              -movflags +faststart \
+              -c:a aac \
+              -b:a 192k \
+              -ar 48000 \
+              -y "$OUTPUT_FILE" 2>/dev/null
+            
+            if [ $? -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
+              mv "$OUTPUT_FILE" "$INPUT_FILE"
+              echo "Re-encoding successful!"
+              return 0
+            else
+              echo "Warning: Re-encoding failed, keeping original file"
+              rm -f "$OUTPUT_FILE"
+              return 1
+            fi
+          }
+          
           RANDOM_WORDS=("alpha" "beta" "gamma" "delta" "epsilon" "zeta" "theta" "kappa" "lambda" "sigma" "omega" "nova" "star" "moon" "sun" "sky" "cloud" "river" "ocean" "mountain")
           get_random_word() { echo "${RANDOM_WORDS[$RANDOM % ${#RANDOM_WORDS[@]}]}_$RANDOM"; }
           get_unique_folder() {
@@ -230,35 +261,36 @@ jobs:
             for METHOD in 1 2 3 4 5 6 7 8; do
               if download_video $METHOD "$URL" "$TMP_DIR"; then
                 echo "Download successful with method $METHOD!"
-                QUALITY_OK=true
                 
-                # MODIFIED: Also check codec and reject if not H.264
-                if [ "$QUALITY" != "audio" ]; then
-                  for DOWNLOADED_FILE in "$TMP_DIR"/*.mp4 "$TMP_DIR"/*.webm "$TMP_DIR"/*.mkv; do
-                    [ -f "$DOWNLOADED_FILE" ] || continue
-                    
-                    # Check height
-                    ACTUAL_HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$DOWNLOADED_FILE" 2>/dev/null || echo "unknown")
-                    
-                    # Check codec - must be H.264
-                    ACTUAL_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$DOWNLOADED_FILE" 2>/dev/null || echo "unknown")
-                    
-                    if [ "$QUALITY" != "best" ] && [ "$QUALITY" != "audio" ]; then
-                      if [ "$ACTUAL_HEIGHT" != "unknown" ] && [ "$ACTUAL_HEIGHT" -lt $(( QUALITY - 150 )) ] 2>/dev/null; then
-                        echo "⚠️  Method $METHOD delivered ${ACTUAL_HEIGHT}p instead of ${QUALITY}p — rejecting..."
-                        QUALITY_OK=false; rm -f "$DOWNLOADED_FILE";
-                      fi
+                # Check downloaded files
+                for DOWNLOADED_FILE in "$TMP_DIR"/*.mp4 "$TMP_DIR"/*.webm "$TMP_DIR"/*.mkv; do
+                  [ -f "$DOWNLOADED_FILE" ] || continue
+                  
+                  # Check codec
+                  ACTUAL_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$DOWNLOADED_FILE" 2>/dev/null || echo "unknown")
+                  
+                  # Re-encode if not H.264
+                  if [[ "$ACTUAL_CODEC" != "h264" ]] && [[ "$ACTUAL_CODEC" != "avc1"* ]]; then
+                    echo "⚠️  File has codec $ACTUAL_CODEC, re-encoding to H.264..."
+                    reencode_for_android "$DOWNLOADED_FILE"
+                  else
+                    # Even if H.264, add faststart for streaming
+                    echo "Adding faststart flag for streaming..."
+                    TEMP_FILE="${DOWNLOADED_FILE}.temp.mp4"
+                    ffmpeg -i "$DOWNLOADED_FILE" -c copy -movflags +faststart -y "$TEMP_FILE" 2>/dev/null && mv "$TEMP_FILE" "$DOWNLOADED_FILE"
+                  fi
+                  
+                  # Check height for quality requirement
+                  if [ "$QUALITY" != "best" ] && [ "$QUALITY" != "audio" ]; then
+                    ACTUAL_HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$DOWNLOADED_FILE" 2>/dev/null || echo "0")
+                    if [ "$ACTUAL_HEIGHT" -lt $(( QUALITY - 150 )) ] 2>/dev/null; then
+                      echo "⚠️  Warning: Expected ${QUALITY}p but got ${ACTUAL_HEIGHT}p"
                     fi
-                    
-                    # Reject if codec is not H.264
-                    if [[ "$ACTUAL_CODEC" != "h264" ]] && [[ "$ACTUAL_CODEC" != "avc1"* ]]; then
-                      echo "⚠️  Method $METHOD delivered codec $ACTUAL_CODEC instead of H.264 — rejecting for Android Box compatibility..."
-                      QUALITY_OK=false; rm -f "$DOWNLOADED_FILE";
-                    fi
-                  done
-                fi
+                  fi
+                done
                 
-                if [ "$QUALITY_OK" = true ]; then DOWNLOAD_SUCCESS=true; break; fi
+                DOWNLOAD_SUCCESS=true
+                break
               else
                 echo "Method $METHOD failed, waiting 3 seconds..."
                 sleep 3
